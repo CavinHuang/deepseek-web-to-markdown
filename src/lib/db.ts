@@ -5,6 +5,8 @@ export interface Article {
   markdown: string;
   createdAt: string;
   updatedAt: string;
+  /** 抓取失败时记录错误详情；有此字段的卡片按失败态渲染。 */
+  error?: string;
 }
 
 const DB_NAME = 'deepseek-markdown-workspace';

@@ -1,34 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
-  Archive,
+  AlertTriangle,
   ArrowDownToLine,
   ArrowRight,
-  BookOpen,
-  Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
+  CircleDollarSign,
   CircleHelp,
-  Clock3,
+  Columns2,
   Copy,
   Download,
   ExternalLink,
-  FileArchive,
+  Eye,
   FileText,
-  Globe2,
-  HardDrive,
+  Info,
   KeyRound,
-  Link2,
   LoaderCircle,
   Pencil,
-  Plus,
   RefreshCw,
   Search,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
   StopCircle,
   Trash2,
+  Wallet,
   X,
   Zap,
 } from 'lucide-react';
@@ -46,15 +41,60 @@ type Settings = {
 };
 
 type PreviewMode = 'split' | 'edit' | 'preview';
-type PreviewTheme = 'paper' | 'github' | 'midnight';
+type PreviewTheme =
+  | 'classic'
+  | 'paper'
+  | 'focus'
+  | 'report'
+  | 'contrast'
+  | 'mist'
+  | 'forest'
+  | 'salt'
+  | 'sand'
+  | 'night';
+type ToastKind = 'success' | 'error' | 'warning' | 'info';
+type ToastItem = { id: number; message: string; kind: ToastKind };
 
 const SETTINGS_KEY = 'deepseek-web-markdown-settings-v1';
+const ONBOARD_DISMISSED_KEY = 'wisemind.deepseek.web2md.onboard.dismissed';
+const PREVIEW_THEME_KEY = 'wisemind.deepseek.web2md.mdTheme';
+const WISEMIND_HOME = 'https://www.wisemindai.app/';
+const DEEPSEEK_API_KEYS_URL = 'https://platform.deepseek.com/api_keys';
+// 有意偏离目标站：目标站抽屉的「请求地址」显示并默认 https://api.deepseek.com/v1/tools/fetch，
+// 但本仓库前端默认走同源 /api 代理（见 README「Same-origin API service」），浏览器直连上游会被
+// CORS 拦截，因此默认值保持 /api，仅提示文案格式与目标站一致（默认：<地址>）。
 const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
   builtinAccessToken: '',
   apiBaseUrl: DEFAULT_API_BASE_URL,
-  delayMs: 500,
+  delayMs: 250,
 };
+
+const PREVIEW_THEMES: Array<{ value: PreviewTheme; label: string }> = [
+  { value: 'classic', label: '经典阅读' },
+  { value: 'paper', label: '纸张阅读' },
+  { value: 'focus', label: '专注阅读' },
+  { value: 'report', label: '报告阅读' },
+  { value: 'contrast', label: '高对比阅读' },
+  { value: 'mist', label: '晨雾阅读' },
+  { value: 'forest', label: '林间阅读' },
+  { value: 'salt', label: '海盐阅读' },
+  { value: 'sand', label: '暖砂阅读' },
+  { value: 'night', label: '夜航阅读' },
+];
+
+function isPreviewTheme(value: unknown): value is PreviewTheme {
+  return PREVIEW_THEMES.some((theme) => theme.value === value);
+}
+
+function loadPreviewTheme(): PreviewTheme {
+  try {
+    const raw = localStorage.getItem(PREVIEW_THEME_KEY);
+    return isPreviewTheme(raw) ? raw : 'classic';
+  } catch {
+    return 'classic';
+  }
+}
 
 function loadSettings(): Settings {
   try {
@@ -65,7 +105,7 @@ function loadSettings(): Settings {
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
       builtinAccessToken: typeof parsed.builtinAccessToken === 'string' ? parsed.builtinAccessToken : '',
       apiBaseUrl: typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim() ? parsed.apiBaseUrl : DEFAULT_API_BASE_URL,
-      delayMs: Math.max(250, Math.min(10000, Number(parsed.delayMs) || 500)),
+      delayMs: Math.max(250, Math.min(10000, Number(parsed.delayMs) || 250)),
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -109,10 +149,12 @@ function canonicalizeUrl(value: string): string {
   }
 }
 
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '刚刚';
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+function hostOf(value: string): string {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '');
+  } catch {
+    return value;
+  }
 }
 
 function App() {
@@ -128,20 +170,32 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
+  const [balanceError, setBalanceError] = useState('');
   const [balanceStatus, setBalanceStatus] = useState<'idle' | 'ok' | 'error'>('idle');
+  const [balanceOpen, setBalanceOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>('split');
-  const [previewTheme, setPreviewTheme] = useState<PreviewTheme>('paper');
-  const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' | 'info' } | null>(null);
-  const [progress, setProgress] = useState({ done: 0, total: 0, currentUrl: '', failed: 0 });
+  const [previewTheme, setPreviewTheme] = useState<PreviewTheme>(() => loadPreviewTheme());
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [progress, setProgress] = useState({ done: 0, total: 0, failed: 0 });
   const [isExporting, setIsExporting] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [onboardOpen, setOnboardOpen] = useState(() => {
+    try {
+      return localStorage.getItem(ONBOARD_DISMISSED_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+  const [onboardDontShow, setOnboardDontShow] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
-  const saveVersionRef = useRef(0);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  // 防抖期间尚未落盘的编辑按文章 id 暂存；切换文章/关闭页面前会先补写，避免丢字。
+  const pendingSavesRef = useRef(new Map<string, Article>());
   const stopRef = useRef(false);
-  const toastTimerRef = useRef<number | null>(null);
+  const toastIdRef = useRef(0);
 
+  const hasCredential = Boolean(settings.apiKey.trim() || settings.builtinAccessToken.trim());
   const activeArticle = articles.find((article) => article.id === activeId) ?? null;
-  const validUrlCount = normalizeUrls(urlInput).urls.length;
   const filteredArticles = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return articles;
@@ -159,6 +213,8 @@ function App() {
       USE_PROFILES: { html: true },
     });
   }, [activeArticle?.markdown]);
+  const hasPreviewContent = Boolean(activeArticle?.markdown.trim());
+  const progressPercent = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -182,89 +238,181 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeArticle || isLoading) {
-      setSaveStatus('idle');
-      return;
+    if (!activeArticle || isLoading) return;
+    pendingSavesRef.current.set(activeArticle.id, activeArticle);
+    // 抢救在其他文章上遗留的待保存编辑：450ms 防抖被切换打断时，定时器会被清除，
+    // 这里立即把旧文章的最新内容补写进 IndexedDB，避免关闭页面后丢失。
+    for (const [id, pending] of pendingSavesRef.current) {
+      if (id === activeArticle.id) continue;
+      pendingSavesRef.current.delete(id);
+      saveArticle(pending).catch(() => showToast('本地保存失败，请检查浏览器存储空间。', 'error'));
     }
-    const saveVersion = ++saveVersionRef.current;
-    setSaveStatus('saving');
     const timer = window.setTimeout(() => {
-      saveArticle(activeArticle)
-        .then(() => {
-          if (saveVersion === saveVersionRef.current) setSaveStatus('saved');
-        })
-        .catch(() => {
-          if (saveVersion !== saveVersionRef.current) return;
-          setSaveStatus('error');
-          showToast('本地保存失败，请检查浏览器存储空间。', 'error');
-        });
+      const pending = pendingSavesRef.current.get(activeArticle.id);
+      pendingSavesRef.current.delete(activeArticle.id);
+      if (pending) {
+        saveArticle(pending).catch(() => showToast('本地保存失败，请检查浏览器存储空间。', 'error'));
+      }
     }, 450);
     return () => window.clearTimeout(timer);
     // Only persist fields that are editable in the workspace.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeArticle?.id, activeArticle?.title, activeArticle?.markdown, activeArticle?.url, isLoading]);
 
+  // 页面关闭/刷新前的兜底 flush；pagehide 里 IndexedDB 仍可写入（unload 中不可靠）。
+  useEffect(() => {
+    const flushPendingSaves = () => {
+      for (const [, pending] of pendingSavesRef.current) {
+        void saveArticle(pending).catch(() => {});
+      }
+      pendingSavesRef.current.clear();
+    };
+    window.addEventListener('pagehide', flushPendingSaves);
+    return () => window.removeEventListener('pagehide', flushPendingSaves);
+  }, []);
+
   useEffect(() => () => {
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     controllerRef.current?.abort();
   }, []);
 
-  function showToast(message: string, kind: 'success' | 'error' | 'info' = 'info') {
-    setToast({ message, kind });
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
+  // 导出下拉：点击外部或按 Escape 时收起（此前纯 CSS :focus-within 无法做到）。
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExportOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [exportOpen]);
+
+  function showToast(message: string, kind: ToastKind = 'info') {
+    const id = ++toastIdRef.current;
+    setToasts((current) => [...current, { id, message, kind }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, 3600);
   }
 
   function updateSettings<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
-  function persistSettings() {
-    const next = { ...settings, delayMs: Math.max(250, Math.min(10000, Number(settings.delayMs) || 500)) };
+  function changePreviewTheme(theme: PreviewTheme) {
+    setPreviewTheme(theme);
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-      setSettings(next);
-      setSettingsOpen(false);
-      showToast('配置已保存在当前浏览器。', 'success');
+      localStorage.setItem(PREVIEW_THEME_KEY, theme);
     } catch {
-      showToast('配置保存失败，请检查浏览器存储设置。', 'error');
+      // 持久化失败时仍允许本次会话内切换主题。
     }
   }
 
-  async function testConnection() {
-    if (!settings.builtinAccessToken.trim() && !settings.apiKey.trim()) {
-      showToast('请填写授权访问 Token，或配置自己的 DeepSeek API Key。', 'error');
-      return;
+  function dismissOnboard() {
+    if (onboardDontShow) {
+      try {
+        localStorage.setItem(ONBOARD_DISMISSED_KEY, '1');
+      } catch {
+        // 忽略持久化失败，仅本次关闭引导。
+      }
+    }
+    setOnboardOpen(false);
+  }
+
+  function openConfiguration() {
+    setOnboardOpen(false);
+    setSettingsOpen(true);
+  }
+
+  async function refreshBalance(next: Settings = settings): Promise<{ ok: boolean; message: string }> {
+    if (!next.apiKey.trim() && !next.builtinAccessToken.trim()) {
+      setBalanceStatus('idle');
+      setBalance(null);
+      setBalanceError('');
+      return { ok: false, message: '请先配置 API Key' };
     }
     setIsTesting(true);
-    setBalanceStatus('idle');
     try {
-      const result = await fetchAccountBalance(settings.apiKey, settings.apiBaseUrl, settings.builtinAccessToken);
+      const result = await fetchAccountBalance(next.apiKey, next.apiBaseUrl, next.builtinAccessToken);
+      const label = result.amount ? `${result.amount} ${result.currency ?? 'CNY'}` : result.available ? '账号可用' : '暂无可用额度';
       setBalanceStatus('ok');
-      setBalance(result.amount ? `${result.amount} ${result.currency ?? 'CNY'}` : result.available ? '账号可用' : '暂无可用额度');
-      showToast('连接成功，已读取账号状态。', 'success');
+      setBalanceError('');
+      setBalance(label);
+      return { ok: true, message: label };
     } catch (error) {
+      const message = error instanceof Error ? error.message : '连接失败。';
       setBalanceStatus('error');
       setBalance(null);
-      const message = error instanceof Error ? error.message : '连接失败。';
-      showToast(`${message} 请检查 API 服务地址、运行状态或跨域白名单。`, 'error');
+      setBalanceError(message);
+      return { ok: false, message };
     } finally {
       setIsTesting(false);
     }
   }
 
+  async function testConnection() {
+    if (!settings.builtinAccessToken.trim() && !settings.apiKey.trim()) {
+      showToast('请填写 API Key', 'warning');
+      return;
+    }
+    const result = await refreshBalance();
+    if (result.ok) showToast('连接成功，已读取账号状态。', 'success');
+    else showToast(result.message, 'error');
+  }
+
+  function persistSettings() {
+    if (!settings.apiKey.trim() && !settings.builtinAccessToken.trim()) {
+      showToast('请填写 API Key', 'warning');
+      return;
+    }
+    const next: Settings = { ...settings, delayMs: Math.max(250, Math.min(10000, Number(settings.delayMs) || 250)) };
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+      setSettings(next);
+      setSettingsOpen(false);
+      showToast('配置已保存。下一步：在左侧输入文章链接并开始抓取', 'success');
+      if (next.apiKey.trim() || next.builtinAccessToken.trim()) void refreshBalance(next);
+    } catch {
+      showToast('配置保存失败，请检查浏览器存储设置。', 'error');
+    }
+  }
+
+  function clearApiKey() {
+    const cleared: Settings = { ...settings, apiKey: '', builtinAccessToken: '' };
+    setSettings(cleared);
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(cleared));
+    } catch {
+      showToast('配置保存失败，请检查浏览器存储设置。', 'error');
+    }
+    setBalance(null);
+    setBalanceStatus('idle');
+    setBalanceError('');
+    showToast('已清空 API Key', 'success');
+  }
+
   async function startCapture() {
     if (isRunning) return;
     const { urls, invalid } = normalizeUrls(urlInput);
-    if (invalid.length > 0) showToast(`已忽略 ${invalid.length} 条无效链接。`, 'info');
+    for (const text of invalid) showToast(`${text}… 无效的 URL`, 'warning');
     if (urls.length === 0) {
-      showToast('请先输入至少一个有效的 http / https 链接。', 'error');
+      showToast('请至少输入一个有效链接', 'warning');
       return;
     }
-    const needsApiKey = urls.some((url) => !articles.some((article) => canonicalizeUrl(article.url) === canonicalizeUrl(url)));
-    if (needsApiKey && !settings.builtinAccessToken.trim() && !settings.apiKey.trim()) {
+    const findReusable = (url: string) => articles.find(
+      (article) => canonicalizeUrl(article.url) === canonicalizeUrl(url) && !article.error,
+    );
+    const needsApiKey = urls.some((url) => !findReusable(url));
+    if (needsApiKey && !hasCredential) {
       setSettingsOpen(true);
-      showToast('抓取新网页前，请填写授权访问 Token 或自己的 DeepSeek API Key；本地已保存文章无需凭据即可复用。', 'info');
+      showToast('请先配置 DeepSeek API Key', 'warning');
       return;
     }
 
@@ -272,28 +420,24 @@ function App() {
     const controller = new AbortController();
     controllerRef.current = controller;
     setIsRunning(true);
-    setProgress({ done: 0, total: urls.length, currentUrl: urls[0], failed: 0 });
-    let failed = 0;
+    setProgress({ done: 0, total: urls.length, failed: 0 });
     let completed = 0;
-    let localReuseCount = 0;
-    let cacheHitCount = 0;
-    let volatileCacheCount = 0;
+    let failed = 0;
+    let volatileCount = 0;
 
     try {
       for (let index = 0; index < urls.length; index += 1) {
         if (stopRef.current) break;
         const url = urls[index];
-        setProgress({ done: completed, total: urls.length, currentUrl: url, failed });
         try {
-          const existing = articles.find((article) => canonicalizeUrl(article.url) === canonicalizeUrl(url));
+          const existing = findReusable(url);
           if (existing) {
             setActiveId(existing.id);
-            localReuseCount += 1;
           } else {
             const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal, settings.builtinAccessToken);
             if (stopRef.current) break;
-            if (result.cacheStatus === 'HIT') cacheHitCount += 1;
-            if (result.cacheStatus === 'VOLATILE') volatileCacheCount += 1;
+            // 服务端缓存未能持久化（X-Cache: VOLATILE）时提示用户：重启后同 URL 可能再次扣费。
+            if (result.cacheStatus === 'VOLATILE') volatileCount += 1;
             const now = new Date().toISOString();
             const article: Article = {
               id: makeId(),
@@ -311,21 +455,37 @@ function App() {
           if (error instanceof DOMException && error.name === 'AbortError') break;
           failed += 1;
           const message = error instanceof Error ? error.message : '未知错误';
-          showToast(`${new URL(url).hostname}：${message}`, 'error');
+          showToast(message, 'error');
+          const now = new Date().toISOString();
+          const failedArticle: Article = {
+            id: makeId(),
+            url,
+            title: '',
+            markdown: '',
+            createdAt: now,
+            updatedAt: now,
+            error: message,
+          };
+          try {
+            await saveArticle(failedArticle);
+            setArticles((current) => [failedArticle, ...current.filter((item) => canonicalizeUrl(item.url) !== canonicalizeUrl(url))]);
+            setActiveId(failedArticle.id);
+          } catch {
+            showToast('失败结果未能写入本地文章库。', 'error');
+          }
         }
         completed += 1;
-        setProgress({ done: completed, total: urls.length, currentUrl: index + 1 < urls.length ? urls[index + 1] : '', failed });
+        setProgress({ done: completed, total: urls.length, failed });
         if (index + 1 < urls.length && !stopRef.current) {
-          await new Promise((resolve) => window.setTimeout(resolve, Math.max(250, Number(settings.delayMs) || 500)));
+          await new Promise((resolve) => window.setTimeout(resolve, Math.max(250, Number(settings.delayMs) || 250)));
         }
       }
-      const reuseSummary = `本地复用 ${localReuseCount} 篇，服务端缓存命中 ${cacheHitCount} 篇。`;
-      const cacheWarning = volatileCacheCount
-        ? `另有 ${volatileCacheCount} 个结果未能持久保存缓存，服务重启后可能再次扣费；请检查服务器缓存目录权限。`
-        : '';
-      if (stopRef.current) showToast(`已停止抓取，完成 ${completed - failed} 篇，失败 ${failed} 篇。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'info');
-      else if (failed === 0) showToast(`抓取完成，处理 ${completed} 个链接。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'success');
-      else showToast(`抓取结束：完成 ${completed - failed} 篇，失败 ${failed} 篇。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'info');
+      if (stopRef.current) showToast(`已停止抓取（${completed}/${urls.length}），已自动保存到本机`, 'info');
+      else if (failed > 0) showToast(`抓取完成（${completed}/${urls.length}，失败 ${failed}），已自动保存到本机`, 'warning');
+      else showToast(`抓取完成（${completed}/${urls.length}），已自动保存到本机`, 'success');
+      if (volatileCount > 0) {
+        showToast(`另有 ${volatileCount} 个结果未能持久保存缓存，服务重启后可能再次扣费；请检查服务器缓存目录权限。`, 'warning');
+      }
       setUrlInput((current) => current.trim());
     } finally {
       setIsRunning(false);
@@ -340,22 +500,28 @@ function App() {
   }
 
   async function removeArticle(article: Article) {
+    if (!window.confirm(`确定从本地删除「${article.url}」？\n删除后刷新也无法恢复（除非你另有导出文件）。`)) return;
     try {
+      pendingSavesRef.current.delete(article.id);
       await deleteArticle(article.id);
       const remaining = articles.filter((item) => item.id !== article.id);
       setArticles(remaining);
       setSelectedArticleIds((current) => current.filter((id) => id !== article.id));
       if (activeId === article.id) setActiveId(remaining[0]?.id ?? null);
-      showToast('文章已从本地库删除。', 'success');
+      showToast('已从本地删除该文章', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除失败。', 'error');
     }
   }
 
   async function removeAllArticles() {
-    if (!articles.length) return;
+    if (!articles.length) {
+      showToast('本地还没有文章', 'warning');
+      return;
+    }
     if (!window.confirm(`确定清空本地文章库中的 ${articles.length} 篇文章吗？此操作无法撤销。`)) return;
     try {
+      pendingSavesRef.current.clear();
       await clearArticles();
       setArticles([]);
       setSelectedArticleIds([]);
@@ -393,6 +559,7 @@ function App() {
     const failedCount = { value: 0 };
     for (const article of selectedArticles) {
       try {
+        pendingSavesRef.current.delete(article.id);
         await deleteArticle(article.id);
         removedIds.push(article.id);
       } catch {
@@ -415,15 +582,23 @@ function App() {
 
   function updateActiveArticle(patch: Partial<Pick<Article, 'title' | 'markdown'>>) {
     if (!activeId) return;
-    setArticles((current) => current.map((article) => article.id === activeId
-      ? { ...article, ...patch, updatedAt: new Date().toISOString() }
-      : article));
+    setArticles((current) => current.map((article) => {
+      if (article.id !== activeId) return article;
+      const next: Article = { ...article, ...patch, updatedAt: new Date().toISOString() };
+      // 用户为「抓取失败」的文章补写了正文即视为已修复，清空失败标记。
+      if (patch.markdown && patch.markdown.trim()) delete next.error;
+      return next;
+    }));
+  }
+
+  function downloadArticleFile(article: Article) {
+    downloadText(`${safeFilename(article.title)}.md`, article.markdown);
+    showToast('Markdown 文件已开始下载。', 'success');
   }
 
   async function exportCurrent() {
     if (!activeArticle) return;
-    downloadText(`${safeFilename(activeArticle.title)}.md`, activeArticle.markdown);
-    showToast('Markdown 文件已开始下载。', 'success');
+    downloadArticleFile(activeArticle);
   }
 
   async function exportAll() {
@@ -484,339 +659,491 @@ function App() {
       await navigator.clipboard.writeText(activeArticle.markdown);
       showToast('Markdown 已复制到剪贴板。', 'success');
     } catch {
-      showToast('浏览器未授予剪贴板权限，请手动复制编辑器内容。', 'error');
+      showToast('复制失败，请手动选择文本', 'error');
     }
   }
 
+  const balanceBadgeLabel = balanceStatus === 'ok' ? '成功' : balanceStatus === 'error' ? '失败' : '未配置';
+
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" aria-label="DeepSeek 网页转 Markdown 首页">
-          <span className="brand-mark"><FileText size={20} strokeWidth={2.1} /></span>
-          <span className="brand-copy">
-            <strong>DeepSeek2MD</strong>
-            <small>网页转 Markdown · 本地工作台</small>
-          </span>
-        </a>
-        <div className="topbar-right">
-          <div className="privacy-chip"><ShieldCheck size={14} /> 本地优先</div>
-          <div className={`api-status ${settings.builtinAccessToken.trim() || settings.apiKey.trim() ? 'is-ready' : ''}`}>
-            <span className="status-dot" />
-            {settings.builtinAccessToken.trim() ? '内置 API 授权' : settings.apiKey.trim() ? '自带 API 已配置' : '尚未配置 API'}
+      {!hasCredential && !onboardOpen && (
+        <div className="setup-banner">
+          <span className="setup-banner-icon" aria-hidden="true">#</span>
+          <div className="setup-banner-copy">
+            <strong>第一步：先配置 DeepSeek API Key</strong>
+            <span>没有 Key 无法抓取网页。配置完成后，再在左侧粘贴文章链接并点击「开始抓取」。</span>
           </div>
-          <button className="button button-primary button-compact" onClick={() => setSettingsOpen(true)}>
-            <Settings2 size={16} /> 配置 API
+          <div className="setup-banner-actions">
+            <button className="button button-gradient" onClick={() => setSettingsOpen(true)}>
+              <KeyRound size={14} /> 去配置 API Key
+            </button>
+            <button className="button button-ghost" onClick={() => setOnboardOpen(true)}>查看引导</button>
+          </div>
+        </div>
+      )}
+
+      <header className="topbar">
+        <div className="brand">
+          <a className="brand-mark" href={WISEMIND_HOME} target="_blank" rel="noreferrer" aria-label="WiseMindAI 官网">W</a>
+          <div className="brand-copy">
+            <h1>DeepSeek 网页转 Markdown</h1>
+            <p>
+              配置 Key → 输入链接 → 抓取编辑 → 导出 ·{' '}
+              <a className="brand-link" href={WISEMIND_HOME} target="_blank" rel="noreferrer">WiseMindAI 出品</a>
+            </p>
+          </div>
+        </div>
+        <div className="topbar-right">
+          <a className="workbench-link" href={WISEMIND_HOME} target="_blank" rel="noreferrer">
+            <ExternalLink size={11} /> 打开工作台
+          </a>
+          <button className="button button-ghost button-guide button-compact" onClick={() => setOnboardOpen(true)}>
+            <CircleHelp size={13} /> 使用引导
           </button>
+          {hasCredential ? (
+            <button className="button button-ghost button-compact" onClick={() => setSettingsOpen(true)}>
+              <KeyRound size={13} /> API 配置 <span className="badge badge-ok">已配置</span>
+            </button>
+          ) : (
+            <button className="button button-gradient button-compact" onClick={() => setSettingsOpen(true)}>
+              <KeyRound size={13} /> 配置 API Key <span className="badge badge-miss">未配置</span>
+            </button>
+          )}
+          <div className={`export-dropdown ${exportOpen ? 'open' : ''}`} ref={exportMenuRef}>
+            <button
+              className="button button-export"
+              onClick={() => setExportOpen((value) => !value)}
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+            >
+              <Download size={14} /> 导出
+            </button>
+            <div className="export-menu" role="menu">
+              <button role="menuitem" onClick={() => { setExportOpen(false); void exportCurrent(); }} disabled={!activeArticle}>导出当前 Markdown</button>
+              <button role="menuitem" onClick={() => { setExportOpen(false); void exportAll(); }} disabled={!articles.length || isExporting}>逐个导出全部 .md</button>
+              <button role="menuitem" onClick={() => { setExportOpen(false); void exportZip(); }} disabled={!articles.length || isExporting}>打包导出 ZIP</button>
+            </div>
+          </div>
+        </div>
+        <div className={`balance-dock ${balanceOpen ? 'open' : ''}`}>
+          <button className="balance-bar" onClick={() => setBalanceOpen((value) => !value)} title="展开余额面板" aria-expanded={balanceOpen}>
+            <span className="balance-bar-chip"><Wallet size={14} /></span>
+            <span className="balance-bar-text">余额</span>
+          </button>
+          <div className="balance-panel" role="dialog" aria-label="DeepSeek 余额">
+            <div className="balance-panel-head">
+              <span className="balance-panel-icon"><Wallet size={14} /></span>
+              <strong>DeepSeek 余额</strong>
+              <span className={`balance-badge badge-${balanceStatus}`}>{balanceBadgeLabel}</span>
+              <button className="balance-collapse" onClick={() => setBalanceOpen(false)} aria-label="收起余额面板"><ChevronRight size={15} /></button>
+            </div>
+            <div className="balance-detail">
+              {balanceStatus === 'ok' && <div className="balance-amount">{balance ?? '账号可用'}</div>}
+              {balanceStatus === 'error' && (
+                <>
+                  <div className="balance-amount">—</div>
+                  <p className="balance-error-text">余额查询失败：{balanceError || '请稍后重试。'}</p>
+                </>
+              )}
+              {balanceStatus === 'idle' && <p className="balance-hint">{hasCredential ? '点击右侧按钮查询余额。' : '配置 API Key 后可查询'}</p>}
+            </div>
+            <div className="balance-detail-actions">
+              <button className="icon-button" onClick={() => void refreshBalance()} disabled={isTesting || !hasCredential} title="刷新余额" aria-label="刷新余额">
+                {isTesting ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
+              </button>
+            </div>
+            <div className="balance-pricing-block">
+              <strong>Fetch 计价</strong>
+              <p>每 1,000 次成功请求 <em>5 元</em></p>
+              <p>约 0.005 元/次；无正文或失败不计费</p>
+            </div>
+          </div>
         </div>
       </header>
 
-      <main id="top" className="main-content">
-        <section className="page-intro">
-          <div className="intro-copy">
-            <div className="eyebrow"><Sparkles size={14} /> 阅读素材 · 本地知识库</div>
-            <h1>把网页，整理成你的 <span>Markdown</span></h1>
-            <p>批量抓取网页正文，随手编辑、即时预览，再保存到自己的知识库。</p>
-          </div>
-          <div className="intro-stats">
-            <div className="stat-card">
-              <span className="stat-icon"><BookOpen size={17} /></span>
-              <span className="stat-value">{articles.length}</span>
-              <span className="stat-label">已保存文章</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon green"><HardDrive size={17} /></span>
-              <span className="stat-value">本地</span>
-              <span className="stat-label">浏览器存储</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="workspace" aria-label="网页转 Markdown 工作区">
-          <aside className="sidebar">
-            <section className="panel capture-panel">
-              <div className="panel-heading">
-                <div className="panel-title-wrap">
-                  <span className="section-icon purple"><Link2 size={16} /></span>
-                  <div><h2>导入网页</h2><p>每行一个链接，支持批量抓取</p></div>
-                </div>
-                <span className="count-pill">{validUrlCount} 条</span>
+      <main className="layout-main">
+        <aside className="sidebar">
+          <section className="panel capture-panel">
+            <div className="panel-heading">
+              <div className="panel-title-wrap">
+                <h2>文章链接</h2>
+                <span className="count-pill">{articles.length}</span>
               </div>
-              <label className="sr-only" htmlFor="url-input">网页链接</label>
-              <textarea
-                id="url-input"
-                className="url-textarea"
-                value={urlInput}
-                onChange={(event) => setUrlInput(event.target.value)}
-                placeholder={'https://example.com/article-one\nhttps://example.com/article-two'}
+              <p className="panel-desc">每行一个 URL，支持批量抓取</p>
+            </div>
+            <label className="sr-only" htmlFor="url-input">文章链接</label>
+            <textarea
+              id="url-input"
+              className="url-textarea"
+              value={urlInput}
+              onChange={(event) => setUrlInput(event.target.value)}
+              placeholder={'https://example.com/article-1\nhttps://example.com/article-2'}
+              disabled={isRunning}
+              spellCheck={false}
+            />
+            <div className="capture-actions">
+              <button className="button button-gradient button-full" onClick={startCapture} disabled={isRunning}>
+                <Zap size={15} /> 开始抓取
+              </button>
+              <button className="button button-ghost button-full" onClick={stopCapture} disabled={!isRunning}>
+                <StopCircle size={15} /> 停止
+              </button>
+            </div>
+            {isRunning && progress.total > 0 && (
+              <div className="progress-block">
+                <div className="progress-copy">
+                  <span>已完成 {progress.done}/{progress.total}{progress.failed > 0 ? ` · 失败 ${progress.failed}` : ''}</span>
+                  <span>{progressPercent}%</span>
+                </div>
+                <div className="progress-track"><span style={{ width: `${progressPercent}%` }} /></div>
+              </div>
+            )}
+          </section>
+
+          <section className="panel library-panel">
+            <div className="library-divider">
+              <span>———— 文章列表 ————</span>
+              <button
+                className="library-clear"
+                onClick={() => void removeAllArticles()}
                 disabled={isRunning}
-                spellCheck={false}
-              />
-              <div className="input-helper"><Globe2 size={13} /> 已保存文章和服务端缓存优先复用，避免重复请求 DeepSeek</div>
-              {isRunning && (
-                <div className="progress-block">
-                  <div className="progress-copy"><span>正在抓取</span><strong>{progress.done} / {progress.total}</strong></div>
-                  <div className="progress-track"><span style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
-                  <div className="progress-url" title={progress.currentUrl}>{progress.currentUrl || '正在整理结果…'}</div>
+                title="清空全部本地文章"
+              >
+                清空
+              </button>
+            </div>
+            <div className="library-alert">
+              {articles.length > 0
+                ? `本地已保存 ${articles.length} 篇。刷新页面会自动恢复；不会自动删除。除非你手动删除，或清空浏览器缓存/站点数据。`
+                : '文章自动保存在本机，刷新可恢复；仅手动删除或清空浏览器缓存后才会消失。'}
+            </div>
+            {articles.length > 0 && (
+              <>
+                <div className="search-box">
+                  <Search size={14} />
+                  <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索标题、链接或正文" aria-label="搜索文章" />
+                  {searchQuery && <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="清除搜索"><X size={12} /></button>}
                 </div>
-              )}
-              <div className="capture-actions">
-                {isRunning ? (
-                  <button className="button button-danger button-full" onClick={stopCapture}><StopCircle size={16} /> 停止抓取</button>
-                ) : (
-                  <button className="button button-dark button-full" onClick={startCapture} disabled={!urlInput.trim()}>
-                    <Zap size={16} /> 开始抓取 <ArrowRight size={16} />
-                  </button>
-                )}
-              </div>
-              <div className="api-footnote"><ShieldCheck size={13} /> 请求经 API 服务转发；API Key 不会写入服务端存储或日志。</div>
-            </section>
-
-            <section className="panel library-panel">
-              <div className="panel-heading library-heading">
-                <div className="panel-title-wrap">
-                  <span className="section-icon blue"><Archive size={16} /></span>
-                  <div><h2>文章库</h2><p>{isLoading ? '正在读取本地文章…' : `${articles.length} 篇已保存`}</p></div>
-                </div>
-                <button className="icon-button subtle" onClick={removeAllArticles} disabled={!articles.length || isRunning} title="清空文章库" aria-label="清空文章库"><Trash2 size={15} /></button>
-              </div>
-              <div className="search-box">
-                <Search size={15} />
-                <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索标题、链接或正文" aria-label="搜索文章" />
-                {searchQuery && <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="清除搜索"><X size={13} /></button>}
-              </div>
-              <div className="selection-toolbar">
-                <label className="select-visible-label">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleArticlesSelected}
-                    onChange={toggleVisibleArticleSelection}
-                    disabled={!filteredArticles.length || isRunning}
-                    aria-label={allVisibleArticlesSelected ? '取消选择当前列表' : '选择当前列表'}
-                  />
-                  <span>{searchQuery ? '全选搜索结果' : '全选文章'}</span>
-                </label>
-                <span className="selection-count">{selectedArticles.length} 已选</span>
-                {selectedArticles.length > 0 && (
-                  <div className="selection-actions">
-                    <button className="selection-action" onClick={() => void exportSelected()} disabled={isExporting} title="逐篇导出选中文章" aria-label="逐篇导出选中文章">导出</button>
-                    <button className="selection-action" onClick={() => void exportSelectedZip()} disabled={isExporting} title="将选中文章打包为 ZIP" aria-label="导出选中文章 ZIP">ZIP</button>
-                    <button className="selection-action danger" onClick={() => void removeSelectedArticles()} disabled={isRunning} title="删除选中文章" aria-label="删除选中文章">删除</button>
-                    <button className="selection-clear" onClick={clearArticleSelection} title="清除选择" aria-label="清除选择"><X size={12} /></button>
-                  </div>
-                )}
-              </div>
-              <div className="article-list">
-                {isLoading ? (
-                  <div className="list-empty"><LoaderCircle className="spin" size={22} /><span>正在读取本地文章</span></div>
-                ) : filteredArticles.length === 0 ? (
-                  <div className="list-empty">
-                    <span className="empty-file-icon"><FileText size={22} /></span>
-                    <strong>{searchQuery ? '没有匹配的文章' : '这里还空空的'}</strong>
-                    <span>{searchQuery ? '试试其他关键词' : '抓取网页后，文章会自动保存在这里'}</span>
-                  </div>
-                ) : filteredArticles.map((article) => (
-                  <div key={article.id} className={`article-row ${activeId === article.id ? 'active' : ''} ${selectedArticleIds.includes(article.id) ? 'is-selected' : ''}`}>
+                <div className="selection-toolbar">
+                  <label className="select-visible-label">
                     <input
                       type="checkbox"
-                      className="article-checkbox"
-                      checked={selectedArticleIds.includes(article.id)}
-                      onChange={() => toggleArticleSelection(article.id)}
-                      disabled={isRunning}
-                      aria-label={`选择文章 ${article.title || '未命名文章'}`}
+                      checked={allVisibleArticlesSelected}
+                      onChange={toggleVisibleArticleSelection}
+                      disabled={!filteredArticles.length || isRunning}
+                      aria-label={allVisibleArticlesSelected ? '取消选择当前列表' : '选择当前列表'}
                     />
-                    <button className="article-select" onClick={() => setActiveId(article.id)}>
-                      <span className="article-file"><FileText size={16} /></span>
-                      <span className="article-meta">
-                        <strong title={article.title}>{article.title || '未命名文章'}</strong>
-                        <span title={article.url}>{article.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
-                        <small><Clock3 size={11} /> {formatDate(article.updatedAt)}</small>
-                      </span>
-                    </button>
-                    <button className="row-delete" onClick={() => void removeArticle(article)} aria-label={`删除 ${article.title}`} title="删除文章"><Trash2 size={14} /></button>
-                  </div>
-                ))}
-              </div>
-              <div className="library-foot"><HardDrive size={13} /> 自动保存在此浏览器，刷新后仍可继续编辑</div>
-            </section>
-          </aside>
-
-          <section className="editor-panel panel">
-            {!activeArticle ? (
-              <div className="editor-empty">
-                <div className="empty-illustration">
-                  <div className="illustration-paper"><span /><span /><span /><i /></div>
-                  <div className="illustration-arrow"><ArrowDownToLine size={21} /></div>
-                  <div className="illustration-md">MD</div>
-                </div>
-                <h2>准备好整理下一篇了吗？</h2>
-                <p>在左侧输入网页链接并开始抓取。内容会自动保存到本地，你可以随时回来继续编辑。</p>
-                <button className="button button-outline" onClick={() => document.getElementById('url-input')?.focus()}><Plus size={16} /> 添加网页链接</button>
-                <div className="empty-privacy"><ShieldCheck size={14} /> 你的文章保存在本地浏览器中</div>
-              </div>
-            ) : (
-              <>
-                <div className="editor-toolbar">
-                  <div className="editor-breadcrumb">
-                    <span className="breadcrumb-root">文章库</span><span className="breadcrumb-slash">/</span><span className="breadcrumb-current" title={activeArticle.title}>{activeArticle.title || '未命名文章'}</span>
-                  </div>
-                  <div className="toolbar-actions">
-                    <button className="icon-button" onClick={() => void copyMarkdown()} title="复制 Markdown" aria-label="复制 Markdown"><Copy size={15} /></button>
-                    <button className="button button-outline button-small" onClick={() => void exportCurrent()}><Download size={14} /> 导出 .md</button>
-                  </div>
-                </div>
-                <div className="document-title-area">
-                  <div className="document-title-icon"><FileText size={19} /></div>
-                  <input
-                    className="document-title-input"
-                    value={activeArticle.title}
-                    onChange={(event) => updateActiveArticle({ title: event.target.value })}
-                    aria-label="文章标题"
-                    placeholder="输入文章标题"
-                  />
-                  <span className={`saved-indicator save-status-${saveStatus}`}>
-                    {saveStatus === 'saving'
-                      ? <LoaderCircle className="spin" size={13} />
-                      : saveStatus === 'error'
-                        ? <AlertCircle size={13} />
-                        : <CheckCircle2 size={13} />}
-                    {saveStatus === 'saving' ? '正在保存' : saveStatus === 'error' ? '保存失败' : '已保存到本地'}
-                  </span>
-                </div>
-                <div className="document-meta-row">
-                  <a href={activeArticle.url} target="_blank" rel="noreferrer" className="source-link"><ExternalLink size={12} /> {activeArticle.url}</a>
-                  <span className="updated-time"><Clock3 size={12} /> 更新于 {formatDate(activeArticle.updatedAt)}</span>
-                </div>
-                <div className="editor-controls">
-                  <div className="view-switch" role="group" aria-label="编辑视图">
-                    <button className={previewMode === 'edit' ? 'selected' : ''} onClick={() => setPreviewMode('edit')}><Pencil size={14} /> 编辑</button>
-                    <button className={previewMode === 'split' ? 'selected' : ''} onClick={() => setPreviewMode('split')}><span className="split-glyph"><i /><i /></span> 分栏</button>
-                    <button className={previewMode === 'preview' ? 'selected' : ''} onClick={() => setPreviewMode('preview')}><EyeIcon /> 预览</button>
-                  </div>
-                  <div className="preview-options">
-                    <span className="word-count">{activeArticle.markdown.length.toLocaleString()} 字符</span>
-                    <label className="theme-select-wrap">
-                      <span>主题</span>
-                      <select value={previewTheme} onChange={(event) => setPreviewTheme(event.target.value as PreviewTheme)} aria-label="预览主题">
-                        <option value="paper">纸感</option>
-                        <option value="github">GitHub</option>
-                        <option value="midnight">深色</option>
-                      </select>
-                      <ChevronDown size={12} />
-                    </label>
-                  </div>
-                </div>
-                <div className={`document-workspace mode-${previewMode} theme-${previewTheme}`}>
-                  {(previewMode === 'edit' || previewMode === 'split') && (
-                    <div className="markdown-editor-column">
-                      <div className="column-heading"><span>MARKDOWN 原文</span><span className="live-dot" /> <span>自动保存</span></div>
-                      <textarea
-                        className="markdown-editor"
-                        value={activeArticle.markdown}
-                        onChange={(event) => updateActiveArticle({ markdown: event.target.value })}
-                        aria-label="Markdown 原文编辑器"
-                        spellCheck={false}
-                      />
+                    <span>{searchQuery ? '全选搜索结果' : '全选文章'}</span>
+                  </label>
+                  <span className="selection-count">{selectedArticles.length} 已选</span>
+                  {selectedArticles.length > 0 && (
+                    <div className="selection-actions">
+                      <button className="selection-action" onClick={() => void exportSelected()} disabled={isExporting} title="逐篇导出选中文章" aria-label="逐篇导出选中文章">导出</button>
+                      <button className="selection-action" onClick={() => void exportSelectedZip()} disabled={isExporting} title="将选中文章打包为 ZIP" aria-label="导出选中文章 ZIP">ZIP</button>
+                      <button className="selection-action danger" onClick={() => void removeSelectedArticles()} disabled={isRunning} title="删除选中文章" aria-label="删除选中文章">删除</button>
+                      <button className="selection-clear" onClick={clearArticleSelection} title="清除选择" aria-label="清除选择"><X size={11} /></button>
                     </div>
                   )}
-                  {(previewMode === 'preview' || previewMode === 'split') && (
-                    <div className="markdown-preview-column">
-                      <div className="column-heading"><span>实时预览</span><span className="preview-ready"><Check size={12} /> 已同步</span></div>
-                      <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-                    </div>
-                  )}
-                </div>
-                <div className="editor-footer">
-                  <span><ShieldCheck size={13} /> 内容只保存在本地浏览器</span>
-                  <div className="footer-actions">
-                    <button className="text-button" onClick={() => void copyMarkdown()}><Copy size={13} /> 复制内容</button>
-                    <button className="text-button emphasized" onClick={() => void exportCurrent()}><Download size={13} /> 下载 Markdown</button>
-                  </div>
                 </div>
               </>
             )}
+            <div className="article-list">
+              {isLoading ? (
+                <div className="list-empty"><LoaderCircle className="spin" size={20} /><span>正在读取本地文章</span></div>
+              ) : filteredArticles.length === 0 ? (
+                <div className="list-empty">
+                  <span className="empty-file-icon"><FileText size={20} /></span>
+                  <span>{searchQuery ? '没有匹配的文章，试试其他关键词' : '抓取后的文章会出现在这里'}</span>
+                </div>
+              ) : filteredArticles.map((article) => (
+                <div key={article.id} className={`article-row ${activeId === article.id ? 'active' : ''} ${selectedArticleIds.includes(article.id) ? 'is-selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    className="article-checkbox"
+                    checked={selectedArticleIds.includes(article.id)}
+                    onChange={() => toggleArticleSelection(article.id)}
+                    disabled={isRunning}
+                    aria-label={`选择文章 ${article.title || (article.error ? '抓取失败' : '未命名文章')}`}
+                  />
+                  <button className="article-select" onClick={() => setActiveId(article.id)}>
+                    <span className={`article-status ${article.error ? 'is-error' : ''}`} aria-hidden="true" />
+                    <span className="article-meta">
+                      {/* 目标站失败卡标题保持墨色，仅错误详情为红色，故标题不加 is-error。 */}
+                      <strong title={article.error ? '抓取失败' : article.title}>
+                        {article.error ? '抓取失败' : article.title || '未命名文章'}
+                      </strong>
+                      <span title={article.url}>{hostOf(article.url)}</span>
+                      {article.error && <em className="article-error">{article.error}</em>}
+                    </span>
+                  </button>
+                  <button className="row-action" onClick={() => downloadArticleFile(article)} aria-label="导出该文章" title="导出该文章 .md"><ArrowDownToLine size={14} /></button>
+                  <button className="row-action row-delete" onClick={() => void removeArticle(article)} aria-label="删除该文章" title="删除该文章"><X size={14} /></button>
+                </div>
+              ))}
+            </div>
           </section>
-        </section>
 
-        <section className="export-strip">
-          <div className="export-intro">
-            <span className="export-icon"><FileArchive size={18} /></span>
-            <div><strong>整理完成，带走你的内容</strong><span>将文章导出到 Obsidian、Notion 或任何 Markdown 工具。</span></div>
+          <div className="wm-promo">
+            <strong>导出后，去 WiseMindAI 继续用</strong>
+            <p>把 Markdown 导入本地 AI 学习工作台：知识库、对话、批注与复习都在一处，读得更快、记得更牢。</p>
+            <a className="button button-gradient button-mini" href={WISEMIND_HOME} target="_blank" rel="noreferrer">打开 WiseMindAI ↗</a>
           </div>
-          <div className="export-actions">
-            <button className="button button-outline" onClick={() => void exportCurrent()} disabled={!activeArticle}><Download size={15} /> 当前文章</button>
-            <button className="button button-outline" onClick={() => void exportAll()} disabled={!articles.length || isExporting}>{isExporting ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} 逐篇导出全部</button>
-            <button className="button button-primary" onClick={() => void exportZip()} disabled={!articles.length || isExporting}><Archive size={15} /> 打包导出 ZIP</button>
+        </aside>
+
+        <section className="editor-panel" aria-label="文章工作区">
+          <div className="editor-toolbar">
+            <div className="editor-title-block">
+              {activeArticle ? (
+                <>
+                  <input
+                    className="editor-title-input"
+                    value={activeArticle.title}
+                    onChange={(event) => updateActiveArticle({ title: event.target.value })}
+                    aria-label="文章标题"
+                    placeholder="未命名文章"
+                  />
+                  <span className="editor-url" title={activeArticle.url}>{activeArticle.url}</span>
+                </>
+              ) : (
+                <span className="editor-title-placeholder">尚未选择文章</span>
+              )}
+            </div>
+            <div className="toolbar-actions">
+              <div className="tabs-box" role="group" aria-label="编辑视图">
+                <button className={previewMode === 'split' ? 'selected' : ''} onClick={() => setPreviewMode('split')}><Columns2 size={14} /> 分栏</button>
+                <button className={previewMode === 'edit' ? 'selected' : ''} onClick={() => setPreviewMode('edit')}><Pencil size={14} /> 编辑</button>
+                <button className={previewMode === 'preview' ? 'selected' : ''} onClick={() => setPreviewMode('preview')}><Eye size={14} /> 预览</button>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => { if (activeArticle) void removeArticle(activeArticle); }}
+                disabled={!activeArticle || isRunning}
+                title="删除当前文章"
+                aria-label="删除当前文章"
+              >
+                <Trash2 size={15} />
+              </button>
+              <button className="icon-button" onClick={() => void copyMarkdown()} disabled={!activeArticle} title="复制 Markdown" aria-label="复制 Markdown"><Copy size={15} /></button>
+              <button className="icon-button" onClick={() => void exportCurrent()} disabled={!activeArticle} title="导出当前 Markdown" aria-label="导出当前 Markdown"><Download size={15} /></button>
+            </div>
+          </div>
+          <div className="workspace-body">
+            <div className={`document-workspace mode-${previewMode} theme-${previewTheme}`}>
+              {(previewMode === 'edit' || previewMode === 'split') && (
+                <div className="markdown-editor-column">
+                  <div className="column-heading">
+                    <span>Markdown 原文</span>
+                    <span className="word-count">{(activeArticle?.markdown.length ?? 0).toLocaleString()} 字</span>
+                  </div>
+                  <textarea
+                    className="markdown-editor"
+                    value={activeArticle?.markdown ?? ''}
+                    onChange={(event) => updateActiveArticle({ markdown: event.target.value })}
+                    aria-label="Markdown 原文编辑器"
+                    placeholder="抓取结果会显示在这里，也可以直接粘贴 Markdown 编辑…"
+                    disabled={!activeArticle}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
+              {(previewMode === 'preview' || previewMode === 'split') && (
+                <div className="markdown-preview-column">
+                  <div className="column-heading">
+                    <span>预览</span>
+                    <label className="theme-select-wrap">
+                      <span className="theme-label">主题</span>
+                      <select
+                        value={previewTheme}
+                        onChange={(event) => changePreviewTheme(event.target.value as PreviewTheme)}
+                        aria-label="预览主题"
+                      >
+                        {PREVIEW_THEMES.map((theme) => (
+                          <option key={theme.value} value={theme.value}>{theme.label}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={11} />
+                    </label>
+                  </div>
+                  {hasPreviewContent ? (
+                    <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                  ) : (
+                    <div className="preview-empty">暂无内容</div>
+                  )}
+                </div>
+              )}
+            </div>
+            {!activeArticle && (
+              <div className="workspace-guide">
+                <div className="workspace-guide-card">
+                  <span className="workspace-guide-icon"><FileText size={22} /></span>
+                  <strong>按三步开始：配置 Key → 输入链接 → 抓取</strong>
+                  <p>未配置 API Key 时，请先点击右上角绿色「配置 API Key」按钮</p>
+                  {hasCredential ? (
+                    <button className="button button-gradient" onClick={() => document.getElementById('url-input')?.focus()}>
+                      <ArrowRight size={14} /> 去输入文章链接
+                    </button>
+                  ) : (
+                    <button className="button button-gradient" onClick={() => setSettingsOpen(true)}>
+                      <KeyRound size={14} /> 配置 API Key
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </section>
-
-        <footer className="app-footer">
-          <span>DEEPSEEK2MD <span className="footer-dot">·</span> 网页转 Markdown</span>
-          <span className="footer-note"><ShieldCheck size={12} /> API Key 保存在浏览器；文章保存在本地</span>
-          <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">DeepSeek API <ExternalLink size={11} /></a>
-        </footer>
       </main>
 
       {settingsOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
-          <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-            <div className="modal-heading">
-              <div className="modal-heading-icon"><KeyRound size={20} /></div>
-              <div><h2 id="settings-title">DeepSeek API 配置</h2><p>授权用户可使用内置 API；其他访客使用自己的 DeepSeek API Key。</p></div>
-              <button className="icon-button modal-close" onClick={() => setSettingsOpen(false)} aria-label="关闭配置"><X size={17} /></button>
-            </div>
-            <div className="privacy-callout"><ShieldCheck size={17} /><span><strong>内置 Key 不会下发到浏览器</strong><small>只有输入服务端配置的访问 Token 才能调用内置 DeepSeek API Key。Token 和自带 Key 保存在当前浏览器；Token 无效会直接拒绝请求，不会回退到自带 Key。</small></span></div>
-            <div className="form-field">
-              <label htmlFor="builtin-access-token">内置 API 访问 Token（授权用户）</label>
-              <input id="builtin-access-token" className="text-input" type="password" value={settings.builtinAccessToken} onChange={(event) => updateSettings('builtinAccessToken', event.target.value)} placeholder="仅向你授权的用户提供" autoComplete="off" />
-              <div className="field-hint">使用服务端的内置额度；必须与管理员配置的 BUILTIN_API_ACCESS_TOKEN 完全一致。填写后优先使用内置 Key。</div>
-            </div>
-            <div className="form-field">
-              <label htmlFor="api-key">自己的 DeepSeek API Key（普通访客）</label>
-              <div className="key-input-wrap">
-                <KeyRound size={16} />
-                <input id="api-key" type={showApiKey ? 'text' : 'password'} value={settings.apiKey} onChange={(event) => updateSettings('apiKey', event.target.value)} placeholder="粘贴你的 DeepSeek API Key" autoComplete="off" />
-                <button className="inline-action" onClick={() => setShowApiKey((value) => !value)}>{showApiKey ? '隐藏' : '显示'}</button>
+          <section className="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div className="drawer-heading">
+              <div>
+                <h2 id="settings-title">DeepSeek API 配置</h2>
+                <p>与应用内「网页读取 · DeepSeek」一致：POST Fetch，返回 title + Markdown</p>
               </div>
-              <div className="field-hint">不持有内置访问 Token 时，填写自己的 Key。<a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">前往 DeepSeek 控制台 <ExternalLink size={11} /></a></div>
+              <button className="icon-button drawer-close" onClick={() => setSettingsOpen(false)} aria-label="关闭配置"><X size={16} /></button>
+            </div>
+            <div className="notice notice-warning"><AlertTriangle size={14} /><span><strong>必须先填写 API Key</strong>Key 仅保存在本机浏览器的 localStorage，不会上传到 WiseMindAI 服务器。</span></div>
+            <div className="form-field">
+              <div className="field-label-row">
+                <label htmlFor="api-key">API Key <span className="required-mark">*</span></label>
+                <button type="button" className="text-toggle" onClick={() => setShowApiKey((value) => !value)}>{showApiKey ? '隐藏' : '显示'}</button>
+              </div>
+              <div className="key-field-row">
+                <div className="key-input-wrap">
+                  <input
+                    id="api-key"
+                    type={showApiKey ? 'text' : 'password'}
+                    value={settings.apiKey}
+                    onChange={(event) => updateSettings('apiKey', event.target.value)}
+                    placeholder="sk-…"
+                    autoComplete="off"
+                  />
+                </div>
+                <button type="button" className="button key-clear" onClick={() => updateSettings('apiKey', '')} aria-label="清空输入">
+                  <Trash2 size={13} /> 清空
+                </button>
+              </div>
+              <div className="field-hint">
+                <a href={DEEPSEEK_API_KEYS_URL} target="_blank" rel="noreferrer">前往 DeepSeek 获取 Key</a>
+                <label htmlFor="api-base-url">请求地址</label>
+              </div>
+              <input
+                id="api-base-url"
+                className="text-input"
+                value={settings.apiBaseUrl}
+                onChange={(event) => updateSettings('apiBaseUrl', event.target.value)}
+                placeholder={DEFAULT_API_BASE_URL}
+              />
+              <div className="field-hint">默认：{DEFAULT_API_BASE_URL}</div>
             </div>
             <div className="form-field">
-              <label htmlFor="api-base-url">API 服务地址</label>
-              <input id="api-base-url" className="text-input" value={settings.apiBaseUrl} onChange={(event) => updateSettings('apiBaseUrl', event.target.value)} placeholder={DEFAULT_API_BASE_URL} />
-              <div className="field-hint">默认使用当前站点的 /api。前后端分开部署时，可填写 API 服务完整地址，并在服务端配置 ALLOWED_ORIGINS。</div>
+              <label htmlFor="delay-ms">并发间隔（ms）</label>
+              <input
+                id="delay-ms"
+                className="text-input"
+                type="number"
+                min={250}
+                max={10000}
+                step={50}
+                value={settings.delayMs}
+                onChange={(event) => updateSettings('delayMs', Number(event.target.value))}
+              />
+              <div className="field-hint">账号 Fetch QPS 上限约 5，建议 ≥ 250ms</div>
             </div>
-            <div className="form-field">
-              <div className="label-with-value"><label htmlFor="delay-ms">请求间隔</label><strong>{Math.max(250, Number(settings.delayMs) || 500)} ms</strong></div>
-              <input id="delay-ms" className="range-input" type="range" min="250" max="3000" step="50" value={Math.max(250, Math.min(3000, Number(settings.delayMs) || 500))} onChange={(event) => updateSettings('delayMs', Number(event.target.value))} />
-              <div className="range-labels"><span>250 ms · 较快</span><span>3,000 ms · 更稳妥</span></div>
+            <div className="notice notice-warning"><CircleDollarSign size={14} /><span><strong>Fetch 计价：每 1,000 次成功请求 5 元</strong>约 0.005 元/次。无正文或失败通常不计费。顶部会显示账号余额，可随时点刷新。</span></div>
+            <div className="notice notice-info"><Info size={14} /><span><strong>浏览器 CORS 说明</strong>直接在浏览器打开本页请求 DeepSeek 时，可能被 CORS 拦截。若失败，可用本地代理改写请求地址，或在支持跨域的环境中打开本工具。</span></div>
+            <div className="request-sample">
+              <span>请求示例</span>
+              <pre>{`{
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer <API_KEY>"
+  },
+  "body": { "url": "https://example.com" }
+}`}</pre>
             </div>
-            <div className="pricing-note"><Zap size={15} /><span><strong>注意 API 用量</strong><small>Fetch 调用可能产生费用。批量抓取前请确认账号额度，并使用合适的请求间隔。</small></span></div>
-            <div className="cors-note"><CircleHelp size={15} /><span>若连接失败，请检查 API 服务是否启动、地址是否正确；跨域部署时还需将前端域名加入服务端 ALLOWED_ORIGINS。</span></div>
-            {balanceStatus === 'ok' && <div className="connection-result success"><CheckCircle2 size={15} /> 连接成功：{balance ?? '账号可用'}</div>}
-            {balanceStatus === 'error' && <div className="connection-result error"><AlertCircle size={15} /> 上次连接失败，请检查 Key、网络或 CORS 配置。</div>}
-            <div className="modal-actions">
-              <button className="button button-quiet" onClick={() => { const cleared = { ...settings, apiKey: '', builtinAccessToken: '' }; setSettings(cleared); localStorage.setItem(SETTINGS_KEY, JSON.stringify(cleared)); setBalance(null); setBalanceStatus('idle'); showToast('已清除本地保存的 API Key 和访问 Token。', 'success'); }}>清空凭据</button>
-              <div className="modal-actions-right">
-                <button className="button button-outline" onClick={() => void testConnection()} disabled={isTesting || (!settings.apiKey.trim() && !settings.builtinAccessToken.trim())}>{isTesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 测试连接</button>
-                <button className="button button-primary" onClick={persistSettings}><Check size={15} /> 保存配置</button>
+            {balanceStatus === 'ok' && <div className="connection-result success"><CheckCircle2 size={14} /> 连接成功：{balance ?? '账号可用'}</div>}
+            {balanceStatus === 'error' && <div className="connection-result error"><AlertCircle size={14} /> {balanceError || '连接失败，请检查 Key 与网络。'}</div>}
+            <div className="drawer-actions">
+              <button className="danger-text" onClick={clearApiKey}><Trash2 size={13} /> 清空 API Key</button>
+              <div className="drawer-actions-right">
+                <button className="button button-outline" onClick={() => void testConnection()} disabled={isTesting}>✓ 测试连接</button>
+                <button className="button button-primary" onClick={persistSettings}>✓ 保存配置</button>
               </div>
             </div>
           </section>
         </div>
       )}
 
-      {toast && (
-        <div className={`toast toast-${toast.kind}`} role="status">
-          {toast.kind === 'success' ? <CheckCircle2 size={17} /> : toast.kind === 'error' ? <AlertCircle size={17} /> : <CircleHelp size={17} />}
-          <span>{toast.message}</span>
-          <button onClick={() => setToast(null)} aria-label="关闭通知"><X size={14} /></button>
+      {onboardOpen && (
+        <div className="onboard-backdrop" role="presentation">
+          <section className="onboard-card" role="dialog" aria-modal="true" aria-labelledby="onboard-title">
+            <div className="onboard-head">
+              <span className="brand-mark brand-mark-small" aria-hidden="true">W</span>
+              <div>
+                <h2 id="onboard-title">开始使用前，先完成三步</h2>
+                <p>本工具通过 DeepSeek Fetch 把网页转成可编辑的 Markdown。首次使用请按顺序操作。</p>
+              </div>
+            </div>
+            <ol className="onboard-steps">
+              <li className="onboard-step is-required">
+                <span className="step-index">1</span>
+                <div className="step-body">
+                  <div className="step-head">
+                    <strong>配置 DeepSeek API Key</strong>
+                    <span className="badge-required">必做</span>
+                  </div>
+                  <p>打开「配置 API Key」，粘贴你的 Key 并保存。没有 Key 无法抓取任何网页。可在 <a href={DEEPSEEK_API_KEYS_URL} target="_blank" rel="noreferrer">DeepSeek 控制台</a> 免费创建。</p>
+                </div>
+              </li>
+              <li className="onboard-step">
+                <span className="step-index">2</span>
+                <div className="step-body">
+                  <strong>输入文章链接</strong>
+                  <p>在左侧文本框粘贴一个或多个 URL，每行一条，支持批量。</p>
+                </div>
+              </li>
+              <li className="onboard-step">
+                <span className="step-index">3</span>
+                <div className="step-body">
+                  <strong>开始抓取并编辑</strong>
+                  <p>点击「开始抓取」。在右侧分栏编辑 / 预览 Markdown，再导出单个文件或 ZIP 包。</p>
+                </div>
+              </li>
+            </ol>
+            <div className="notice notice-info"><Info size={14} /><span><strong>抓取与编辑的内容会自动保存在本机浏览器</strong>，刷新页面后仍可继续编辑。只有你手动删除，或清空浏览器缓存/站点数据时才会消失。</span></div>
+            <div className="onboard-promo">
+              <strong>下一步：在 WiseMindAI 里用起来</strong>
+              <p>导出的 Markdown 可直接放进本地 AI 学习工作台，做知识库检索、对话与复习，比单独存文件更高效。</p>
+              <a className="onboard-promo-link" href={WISEMIND_HOME} target="_blank" rel="noreferrer">了解 WiseMindAI <ExternalLink size={11} /></a>
+            </div>
+            <div className="onboard-actions">
+              <label className="onboard-remember">
+                <input type="checkbox" checked={onboardDontShow} onChange={(event) => setOnboardDontShow(event.target.checked)} />
+                <span>下次不再自动弹出</span>
+              </label>
+              <div className="onboard-actions-right">
+                <button className="button button-ghost" onClick={dismissOnboard}>稍后再说</button>
+                <button className="button button-gradient" onClick={openConfiguration}><KeyRound size={14} /> 去配置 API Key</button>
+              </div>
+            </div>
+          </section>
         </div>
       )}
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((item) => (
+          <div key={item.id} className={`toast toast-${item.kind}`} role="status">
+            <span>{item.message}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
-}
-
-function EyeIcon() {
-  return <span className="eye-glyph" aria-hidden="true">◉</span>;
 }
 
 export default App;
