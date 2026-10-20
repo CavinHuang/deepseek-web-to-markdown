@@ -84,7 +84,7 @@ Open `http://localhost:4173`. To change the host port, set `APP_PORT` in your sh
 
 To update after new commits, run `docker compose up -d --build` again. The named volume `deepseek-web-to-markdown-url-cache` is retained when containers are recreated. **Do not run `docker compose down -v` unless you intentionally want to delete the persistent cache**; losing it can cause old URLs to be requested again.
 
-For Dokploy, deploy from the repository using its Compose file and route traffic to container port `4173`. Keep the named volume mounted at `/app/data`. The service requires no server-side DeepSeek key because it uses BYOK. Cache files are retained rather than evicted, so reserve disk space as the library grows. The in-flight duplicate guard is per process; use one API replica unless you add a shared cache with distributed locking.
+For Dokploy, use Compose Path `./docker-compose.yml` (the repository keeps this compatibility filename alongside `docker-compose.yaml` because some Dokploy versions fail to locate the `.yaml` extension). Route traffic to container port `4173` and keep the named volume mounted at `/app/data`. Keep both Compose files identical when editing deployment settings. The service requires no server-side DeepSeek key because it uses BYOK. Cache files are retained rather than evicted, so reserve disk space as the library grows. The in-flight duplicate guard is per process; use one API replica unless you add a shared cache with distributed locking.
 
 ### Run directly with Docker (alternative)
 
