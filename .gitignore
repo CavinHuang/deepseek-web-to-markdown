@@ -7,3 +7,5 @@ dist/
 *.log
 .vscode/
 data/url-cache/
+# 仓库刻意不使用 lockfile（CI/Docker 均用 npm install，见 commit 39dc817）
+package-lock.json
