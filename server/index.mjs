@@ -3,7 +3,8 @@ import { createReadStream } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractBearerKey, validateTargetUrl } from './validation.mjs';
+import { validateTargetUrl } from './validation.mjs';
+import { resolveApiCredential } from './api-auth.mjs';
 import { createUrlCacheKey, UrlResponseCache } from './url-cache.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +17,15 @@ const fetchEndpoint = new URL(process.env.DEEPSEEK_FETCH_ENDPOINT || defaultFetc
 if (fetchEndpoint.protocol !== 'https:') {
   throw new Error('DEEPSEEK_FETCH_ENDPOINT must use HTTPS.');
 }
+const builtinApiKey = (process.env.DEEPSEEK_API_KEY || '').trim();
+const builtinApiAccessToken = (process.env.BUILTIN_API_ACCESS_TOKEN || '').trim();
+if (builtinApiKey && !builtinApiAccessToken) {
+  console.warn('[config] DEEPSEEK_API_KEY is set but BUILTIN_API_ACCESS_TOKEN is missing; built-in-key access is disabled.');
+}
+if (builtinApiAccessToken && !builtinApiKey) {
+  console.warn('[config] BUILTIN_API_ACCESS_TOKEN is set but DEEPSEEK_API_KEY is missing; built-in-key requests will be rejected.');
+}
+
 const allowedOrigins = new Set(
   (process.env.ALLOWED_ORIGINS || '')
     .split(',')
@@ -68,7 +78,7 @@ function applyCors(req, res) {
   if (!allowed) return false;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Builtin-API-Token');
   res.setHeader('Access-Control-Expose-Headers', 'X-Cache');
   res.setHeader('Access-Control-Max-Age', '600');
   res.setHeader('Vary', 'Origin');
@@ -242,11 +252,17 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const apiKey = extractBearerKey(req.headers.authorization);
-  if (!apiKey) {
-    sendJson(res, 401, { error: 'missing_api_key', message: '请在应用设置中配置有效的 DeepSeek API Key。' });
+  const credential = resolveApiCredential({
+    authorizationHeader: req.headers.authorization,
+    builtinTokenHeader: req.headers['x-builtin-api-token'],
+    configuredBuiltinApiKey: builtinApiKey,
+    configuredBuiltinAccessToken: builtinApiAccessToken,
+  });
+  if (!credential.ok) {
+    sendJson(res, credential.status, { error: credential.error, message: credential.message });
     return;
   }
+  const apiKey = credential.apiKey;
 
   if (url.pathname === '/api/fetch') {
     const contentType = String(req.headers['content-type'] || '').toLowerCase();

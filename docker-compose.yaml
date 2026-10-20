@@ -8,6 +8,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: "4173"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      BUILTIN_API_ACCESS_TOKEN: ${BUILTIN_API_ACCESS_TOKEN:-}
       URL_CACHE_DIR: /app/data/url-cache
       URL_CACHE_MEMORY_ENTRIES: "128"
     ports:

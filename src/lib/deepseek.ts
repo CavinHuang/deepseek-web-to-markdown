@@ -58,6 +58,17 @@ function extractResult(payload: unknown, fallbackTitle: string, cacheStatus: Cac
   return { title, markdown, cacheStatus };
 }
 
+function buildAuthHeaders(apiKey: string, builtinAccessToken: string, includeContentType = false): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (includeContentType) headers['Content-Type'] = 'application/json';
+  if (builtinAccessToken.trim()) {
+    headers['X-Builtin-API-Token'] = builtinAccessToken.trim();
+  } else if (apiKey.trim()) {
+    headers.Authorization = 'Bearer ' + apiKey.trim();
+  }
+  return headers;
+}
+
 async function readError(response: Response): Promise<string | undefined> {
   const payload = await response.json().catch(() => null);
   if (!payload || typeof payload !== 'object') return undefined;
@@ -70,21 +81,19 @@ export async function fetchWebpageAsMarkdown(
   apiKey: string,
   apiBaseUrl: string,
   signal: AbortSignal,
+  builtinAccessToken = '',
 ): Promise<FetchResult> {
   const response = await fetch(buildApiUrl(apiBaseUrl, 'fetch'), {
     method: 'POST',
     signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + apiKey.trim(),
-    },
+    headers: buildAuthHeaders(apiKey, builtinAccessToken, true),
     body: JSON.stringify({ url }),
   });
 
   if (!response.ok) {
     const message = await readError(response);
     if (response.status === 401 || response.status === 403) {
-      throw new Error('API Key 无效、没有调用权限，或 API 服务拒绝了请求。');
+      throw new Error(message ?? 'API Key 或内置 API 访问 Token 无效，或没有调用权限。');
     }
     if (response.status === 429) {
       throw new Error(message ?? '请求过于频繁或额度不足，请增大请求间隔后重试。');
@@ -115,10 +124,10 @@ export interface BalanceResult {
   amount?: string;
 }
 
-export async function fetchAccountBalance(apiKey: string, apiBaseUrl: string): Promise<BalanceResult> {
+export async function fetchAccountBalance(apiKey: string, apiBaseUrl: string, builtinAccessToken = ''): Promise<BalanceResult> {
   const response = await fetch(buildApiUrl(apiBaseUrl, 'balance'), {
     method: 'GET',
-    headers: { Authorization: 'Bearer ' + apiKey.trim() },
+    headers: buildAuthHeaders(apiKey, builtinAccessToken),
   });
   if (!response.ok) {
     const message = await readError(response);

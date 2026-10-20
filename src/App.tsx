@@ -40,6 +40,7 @@ import { DEFAULT_API_BASE_URL, fetchAccountBalance, fetchWebpageAsMarkdown } fro
 
 type Settings = {
   apiKey: string;
+  builtinAccessToken: string;
   apiBaseUrl: string;
   delayMs: number;
 };
@@ -50,6 +51,7 @@ type PreviewTheme = 'paper' | 'github' | 'midnight';
 const SETTINGS_KEY = 'deepseek-web-markdown-settings-v1';
 const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
+  builtinAccessToken: '',
   apiBaseUrl: DEFAULT_API_BASE_URL,
   delayMs: 500,
 };
@@ -61,6 +63,7 @@ function loadSettings(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
+      builtinAccessToken: typeof parsed.builtinAccessToken === 'string' ? parsed.builtinAccessToken : '',
       apiBaseUrl: typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim() ? parsed.apiBaseUrl : DEFAULT_API_BASE_URL,
       delayMs: Math.max(250, Math.min(10000, Number(parsed.delayMs) || 500)),
     };
@@ -207,14 +210,14 @@ function App() {
   }
 
   async function testConnection() {
-    if (!settings.apiKey.trim()) {
-      showToast('请先填写 API Key。', 'error');
+    if (!settings.builtinAccessToken.trim() && !settings.apiKey.trim()) {
+      showToast('请填写授权访问 Token，或配置自己的 DeepSeek API Key。', 'error');
       return;
     }
     setIsTesting(true);
     setBalanceStatus('idle');
     try {
-      const result = await fetchAccountBalance(settings.apiKey, settings.apiBaseUrl);
+      const result = await fetchAccountBalance(settings.apiKey, settings.apiBaseUrl, settings.builtinAccessToken);
       setBalanceStatus('ok');
       setBalance(result.amount ? `${result.amount} ${result.currency ?? 'CNY'}` : result.available ? '账号可用' : '暂无可用额度');
       showToast('连接成功，已读取账号状态。', 'success');
@@ -237,9 +240,9 @@ function App() {
       return;
     }
     const needsApiKey = urls.some((url) => !articles.some((article) => canonicalizeUrl(article.url) === canonicalizeUrl(url)));
-    if (needsApiKey && !settings.apiKey.trim()) {
+    if (needsApiKey && !settings.builtinAccessToken.trim() && !settings.apiKey.trim()) {
       setSettingsOpen(true);
-      showToast('抓取新网页前需要配置 DeepSeek API Key；已保存在本地的文章无需 Key 即可复用。', 'info');
+      showToast('抓取新网页前，请填写授权访问 Token 或自己的 DeepSeek API Key；本地已保存文章无需凭据即可复用。', 'info');
       return;
     }
 
@@ -265,7 +268,7 @@ function App() {
             setActiveId(existing.id);
             localReuseCount += 1;
           } else {
-            const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal);
+            const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal, settings.builtinAccessToken);
             if (stopRef.current) break;
             if (result.cacheStatus === 'HIT') cacheHitCount += 1;
             if (result.cacheStatus === 'VOLATILE') volatileCacheCount += 1;
@@ -400,12 +403,12 @@ function App() {
         </a>
         <div className="topbar-right">
           <div className="privacy-chip"><ShieldCheck size={14} /> 本地优先</div>
-          <div className={`api-status ${settings.apiKey.trim() ? 'is-ready' : ''}`}>
+          <div className={`api-status ${settings.builtinAccessToken.trim() || settings.apiKey.trim() ? 'is-ready' : ''}`}>
             <span className="status-dot" />
-            {settings.apiKey.trim() ? 'API 已配置' : '尚未配置 API'}
+            {settings.builtinAccessToken.trim() ? '内置 API 授权' : settings.apiKey.trim() ? '自带 API 已配置' : '尚未配置 API'}
           </div>
           <button className="button button-primary button-compact" onClick={() => setSettingsOpen(true)}>
-            <Settings2 size={16} /> 配置 API Key
+            <Settings2 size={16} /> 配置 API
           </button>
         </div>
       </header>
@@ -625,18 +628,23 @@ function App() {
           <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="modal-heading">
               <div className="modal-heading-icon"><KeyRound size={20} /></div>
-              <div><h2 id="settings-title">DeepSeek API 配置</h2><p>API Key 保存在浏览器，请求通过你信任的 API 服务转发。</p></div>
+              <div><h2 id="settings-title">DeepSeek API 配置</h2><p>授权用户可使用内置 API；其他访客使用自己的 DeepSeek API Key。</p></div>
               <button className="icon-button modal-close" onClick={() => setSettingsOpen(false)} aria-label="关闭配置"><X size={17} /></button>
             </div>
-            <div className="privacy-callout"><ShieldCheck size={17} /><span><strong>你的 Key 由你掌控</strong><small>API Key 保存在当前浏览器；每次请求会通过 API 服务转发到 DeepSeek，不会写入服务端存储或日志。请只连接你信任的 API 服务。</small></span></div>
+            <div className="privacy-callout"><ShieldCheck size={17} /><span><strong>内置 Key 不会下发到浏览器</strong><small>只有输入服务端配置的访问 Token 才能调用内置 DeepSeek API Key。Token 和自带 Key 保存在当前浏览器；Token 无效会直接拒绝请求，不会回退到自带 Key。</small></span></div>
             <div className="form-field">
-              <label htmlFor="api-key">API Key <span className="required-mark">*</span></label>
+              <label htmlFor="builtin-access-token">内置 API 访问 Token（授权用户）</label>
+              <input id="builtin-access-token" className="text-input" type="password" value={settings.builtinAccessToken} onChange={(event) => updateSettings('builtinAccessToken', event.target.value)} placeholder="仅向你授权的用户提供" autoComplete="off" />
+              <div className="field-hint">使用服务端的内置额度；必须与管理员配置的 BUILTIN_API_ACCESS_TOKEN 完全一致。填写后优先使用内置 Key。</div>
+            </div>
+            <div className="form-field">
+              <label htmlFor="api-key">自己的 DeepSeek API Key（普通访客）</label>
               <div className="key-input-wrap">
                 <KeyRound size={16} />
                 <input id="api-key" type={showApiKey ? 'text' : 'password'} value={settings.apiKey} onChange={(event) => updateSettings('apiKey', event.target.value)} placeholder="粘贴你的 DeepSeek API Key" autoComplete="off" />
                 <button className="inline-action" onClick={() => setShowApiKey((value) => !value)}>{showApiKey ? '隐藏' : '显示'}</button>
               </div>
-              <div className="field-hint">没有 Key？<a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">前往 DeepSeek 控制台 <ExternalLink size={11} /></a></div>
+              <div className="field-hint">不持有内置访问 Token 时，填写自己的 Key。<a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">前往 DeepSeek 控制台 <ExternalLink size={11} /></a></div>
             </div>
             <div className="form-field">
               <label htmlFor="api-base-url">API 服务地址</label>
@@ -653,9 +661,9 @@ function App() {
             {balanceStatus === 'ok' && <div className="connection-result success"><CheckCircle2 size={15} /> 连接成功：{balance ?? '账号可用'}</div>}
             {balanceStatus === 'error' && <div className="connection-result error"><AlertCircle size={15} /> 上次连接失败，请检查 Key、网络或 CORS 配置。</div>}
             <div className="modal-actions">
-              <button className="button button-quiet" onClick={() => { const cleared = { ...settings, apiKey: '' }; setSettings(cleared); localStorage.setItem(SETTINGS_KEY, JSON.stringify(cleared)); setBalance(null); setBalanceStatus('idle'); showToast('已清除本地保存的 API Key。', 'success'); }}>清空 Key</button>
+              <button className="button button-quiet" onClick={() => { const cleared = { ...settings, apiKey: '', builtinAccessToken: '' }; setSettings(cleared); localStorage.setItem(SETTINGS_KEY, JSON.stringify(cleared)); setBalance(null); setBalanceStatus('idle'); showToast('已清除本地保存的 API Key 和访问 Token。', 'success'); }}>清空凭据</button>
               <div className="modal-actions-right">
-                <button className="button button-outline" onClick={() => void testConnection()} disabled={isTesting || !settings.apiKey.trim()}>{isTesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 测试连接</button>
+                <button className="button button-outline" onClick={() => void testConnection()} disabled={isTesting || (!settings.apiKey.trim() && !settings.builtinAccessToken.trim())}>{isTesting ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 测试连接</button>
                 <button className="button button-primary" onClick={persistSettings}><Check size={15} /> 保存配置</button>
               </div>
             </div>
