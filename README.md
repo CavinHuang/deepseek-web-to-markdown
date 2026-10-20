@@ -1,6 +1,6 @@
 # DeepSeek Web to Markdown
 
-A clean-room, local-first web-to-Markdown workspace inspired by the publicly observable workflow of [DeepSeek 网页转 Markdown](https://deepseek2md.aichris.cc/). This independent project does not copy the original site's private implementation or assets and is not affiliated with DeepSeek or WiseMindAI.
+A clean-room, local-first web-to-Markdown workspace inspired by the publicly observable workflow of [DeepSeek 网页转 Markdown](https://deepseek2md.aichris.cc/). This independent project does not copy the original site's private implementation or assets, and is not operated by or affiliated with DeepSeek or WiseMindAI. The interface intentionally reproduces the original site's look and wording — including its WiseMindAI branding and links — as part of the replication; those names and brands belong to their respective owners.
 
 ## Features
 
@@ -12,7 +12,7 @@ A clean-room, local-first web-to-Markdown workspace inspired by the publicly obs
 - Gated built-in key: operators can configure `DEEPSEEK_API_KEY` and `BUILTIN_API_ACCESS_TOKEN` on the server. Only requests with the matching access token use the built-in key; other visitors must provide their own key.
 - Invalid built-in tokens are rejected with HTTP 403 and never fall back to a visitor's API key or trigger an upstream request.
 - Local-first storage: articles are saved in browser IndexedDB and restored after refresh. The API key and API service URL are saved in browser localStorage.
-- Markdown workspace: edit the title and source, preview changes immediately, switch between split, edit-only, and preview-only layouts, and see real save status instead of a permanent “saved” label.
+- Markdown workspace: edit the title and source, preview changes immediately, and switch between split, edit-only, and preview-only layouts.
 - Article management: search the local library, select all filtered results or individual articles, bulk-delete selected articles, and export selected articles individually or as a ZIP.
 - Export: download the current Markdown, trigger one download per saved article, or package the full library into a ZIP archive.
 - Responsive UI and sanitized Markdown preview.
@@ -76,7 +76,7 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 - URL_CACHE_DIR — persistent disk directory for successful URL responses (default `./data/url-cache` relative to the project root).
 - URL_CACHE_MEMORY_ENTRIES — maximum in-memory cache entries (default 128; disk entries are retained).
 - ALLOWED_ORIGINS — comma-separated frontend origins allowed to call the API cross-origin. Same-origin calls work without this setting.
-- TRUST_PROXY — set true only when running behind a trusted reverse proxy that sets X-Forwarded-For; enables client-IP-based rate limiting.
+- TRUST_PROXY — set true only when running behind a trusted reverse proxy that sets X-Forwarded-For; enables client-IP-based rate limiting and honors X-Forwarded-Host/X-Forwarded-Proto in the same-origin CORS check. Without it, forwarded headers are ignored so they cannot spoof the allowlist.
 
 ## Deploy with Docker Compose (recommended)
 
@@ -110,7 +110,7 @@ docker run --rm -p 4173:4173 -v deepseek-url-cache:/app/data deepseek-web-to-mar
 - Cache filenames are SHA-256 hashes of the normalized URL, upstream endpoint, and API key; the raw API key is not stored. Cache data is isolated by API key and endpoint.
 - Successful Fetch responses are retained on disk indefinitely to prevent repeat billing. Protect the persistent cache volume because it contains captured webpage content.
 - Requests are rate-limited in memory. For multi-instance deployments, use an external shared rate limiter or gateway-level limits.
-- Target URLs must use HTTP(S); local hostnames, credentials in URLs, and common private/reserved IP ranges are rejected. This is a defense-in-depth measure, not a substitute for upstream network isolation.
+- Target URLs must use HTTP(S); local hostnames, credentials in URLs, and private/reserved IP literals (including IPv4-mapped and NAT64 forms) are rejected, and hostnames are additionally resolved and checked so names pointing at private addresses (e.g. nip.io style) are blocked too. This is a defense-in-depth measure, not a substitute for upstream network isolation.
 - Captured articles remain in browser IndexedDB. Clearing site data removes them.
 - DeepSeek calls may incur charges. Check your account quota before large batches.
 
@@ -118,11 +118,14 @@ docker run --rm -p 4173:4173 -v deepseek-url-cache:/app/data deepseek-web-to-mar
 
 ~~~text
 server/
-  index.mjs             API proxy and production static server
-  url-cache.mjs         Persistent URL response cache and cache-key hashing
-  url-cache.test.mjs    Cache normalization, persistence, and corruption tests
-  validation.mjs        URL and bearer-key validation
-  validation.test.mjs   API input validation tests
+  index.mjs                  API proxy and production static server
+  api-auth.mjs               Built-in-key credential resolution (timing-safe)
+  api-auth.test.mjs          Built-in-key authentication tests
+  production-smoke.test.mjs  Production server smoke tests
+  url-cache.mjs              Persistent URL response cache and cache-key hashing
+  url-cache.test.mjs         Cache normalization, persistence, and corruption tests
+  validation.mjs             Async URL validation (incl. DNS resolution) and bearer-key validation
+  validation.test.mjs        API input validation tests
 src/
   App.tsx               Main workspace UI
   main.tsx              React entry point
