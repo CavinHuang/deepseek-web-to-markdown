@@ -4,6 +4,7 @@ import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractBearerKey, validateTargetUrl } from './validation.mjs';
+import { createUrlCacheKey, UrlResponseCache } from './url-cache.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -26,6 +27,14 @@ const rateLimitMax = Math.max(1, Number(process.env.API_RATE_LIMIT_MAX) || 120);
 const maxRequestBytes = 32 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
 const rateBuckets = new Map();
+const urlCacheDirectory = process.env.URL_CACHE_DIR
+  ? path.resolve(process.env.URL_CACHE_DIR)
+  : path.join(rootDir, 'data', 'url-cache');
+const urlCache = new UrlResponseCache({
+  directory: urlCacheDirectory,
+  memoryEntries: Math.max(1, Number(process.env.URL_CACHE_MEMORY_ENTRIES) || 128),
+});
+const inFlightFetches = new Map();
 let requestCounter = 0;
 
 function sendJson(res, status, payload, extraHeaders = {}) {
@@ -60,6 +69,7 @@ function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Cache');
   res.setHeader('Access-Control-Max-Age', '600');
   res.setHeader('Vary', 'Origin');
   return true;
@@ -150,17 +160,19 @@ async function readLimitedText(response) {
   return new TextDecoder().decode(combined);
 }
 
-async function forwardJsonRequest(url, init, res) {
+async function requestJson(url, init) {
   let upstream;
   try {
     upstream = await fetch(url, { ...init, signal: AbortSignal.timeout(60000) });
   } catch (error) {
     const timedOut = error && (error.name === 'TimeoutError' || error.name === 'AbortError');
-    sendJson(res, timedOut ? 504 : 502, {
-      error: timedOut ? 'upstream_timeout' : 'upstream_unavailable',
-      message: timedOut ? 'DeepSeek 请求超时，请稍后重试。' : '无法连接 DeepSeek API，请检查网络或服务配置。',
-    });
-    return;
+    return {
+      status: timedOut ? 504 : 502,
+      payload: {
+        error: timedOut ? 'upstream_timeout' : 'upstream_unavailable',
+        message: timedOut ? 'DeepSeek 请求超时，请稍后重试。' : '无法连接 DeepSeek API，请检查网络或服务配置。',
+      },
+    };
   }
 
   try {
@@ -169,19 +181,29 @@ async function forwardJsonRequest(url, init, res) {
     try {
       payload = JSON.parse(text);
     } catch {
-      sendJson(res, 502, {
-        error: 'invalid_upstream_response',
-        message: 'DeepSeek API 返回了非 JSON 响应（HTTP ' + upstream.status + '）。',
-      });
-      return;
+      return {
+        status: 502,
+        payload: {
+          error: 'invalid_upstream_response',
+          message: 'DeepSeek API 返回了非 JSON 响应（HTTP ' + upstream.status + '）。',
+        },
+      };
     }
-    sendJson(res, upstream.status, payload);
+    return { status: upstream.status, payload };
   } catch (error) {
-    sendJson(res, 502, {
-      error: 'upstream_response_error',
-      message: error instanceof Error ? error.message : '读取 DeepSeek 响应失败。',
-    });
+    return {
+      status: 502,
+      payload: {
+        error: 'upstream_response_error',
+        message: error instanceof Error ? error.message : '读取 DeepSeek 响应失败。',
+      },
+    };
   }
+}
+
+async function forwardJsonRequest(url, init, res) {
+  const result = await requestJson(url, init);
+  sendJson(res, result.status, result.payload);
 }
 
 async function handleApi(req, res, url) {
@@ -246,15 +268,72 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: 'invalid_target_url', message: error instanceof Error ? error.message : '网页 URL 无效。' });
       return;
     }
-    await forwardJsonRequest(fetchEndpoint.toString(), {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + apiKey,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({ url: targetUrl }),
-    }, res);
+    const cacheKey = createUrlCacheKey({
+      url: targetUrl,
+      apiKey,
+      upstreamEndpoint: fetchEndpoint.toString(),
+    });
+    let cached;
+    try {
+      cached = await urlCache.get(cacheKey);
+    } catch {
+      console.error('[cache] unable to read URL cache; upstream request blocked to avoid duplicate billing');
+      sendJson(res, 503, {
+        error: 'url_cache_unavailable',
+        message: 'URL 缓存读取失败。为避免重复扣费，本次未重新请求 DeepSeek，请检查服务器缓存目录。',
+      });
+      return;
+    }
+    if (cached) {
+      sendJson(res, cached.status, cached.payload, { 'X-Cache': 'HIT' });
+      return;
+    }
+
+    const currentRequest = inFlightFetches.get(cacheKey);
+    const joinedInFlight = Boolean(currentRequest);
+    let requestPromise = currentRequest;
+    if (!requestPromise) {
+      requestPromise = (async () => {
+        const result = await requestJson(fetchEndpoint.toString(), {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + apiKey,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ url: targetUrl }),
+        });
+        if (result.status < 200 || result.status >= 300) {
+          return { ...result, cacheStatus: 'BYPASS' };
+        }
+        try {
+          await urlCache.set(cacheKey, result.status, result.payload);
+          return { ...result, cacheStatus: 'MISS' };
+        } catch {
+          console.error('[cache] failed to persist URL cache; result kept in memory only');
+          return { ...result, cacheStatus: 'VOLATILE' };
+        }
+      })();
+      inFlightFetches.set(cacheKey, requestPromise);
+      void requestPromise.finally(() => {
+        if (inFlightFetches.get(cacheKey) === requestPromise) inFlightFetches.delete(cacheKey);
+      }).catch(() => {});
+    }
+
+    let result;
+    try {
+      result = await requestPromise;
+    } catch {
+      sendJson(res, 502, {
+        error: 'upstream_request_failed',
+        message: '请求处理失败。请检查服务日志；为避免重复扣费，请勿立即重复提交。',
+      });
+      return;
+    }
+    const cacheStatus = joinedInFlight && (result.cacheStatus === 'MISS' || result.cacheStatus === 'VOLATILE')
+      ? 'HIT'
+      : result.cacheStatus;
+    sendJson(res, result.status, result.payload, { 'X-Cache': cacheStatus });
     return;
   }
 

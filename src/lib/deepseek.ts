@@ -1,8 +1,11 @@
 export const DEFAULT_API_BASE_URL = '/api';
 
+export type CacheStatus = 'HIT' | 'MISS' | 'BYPASS' | 'VOLATILE';
+
 export interface FetchResult {
   title: string;
   markdown: string;
+  cacheStatus: CacheStatus | null;
 }
 
 function pickString(...values: unknown[]): string | undefined {
@@ -26,7 +29,7 @@ function buildApiUrl(apiBaseUrl: string, path: string): string {
   return base + '/' + path;
 }
 
-function extractResult(payload: unknown, fallbackTitle: string): FetchResult {
+function extractResult(payload: unknown, fallbackTitle: string, cacheStatus: CacheStatus | null): FetchResult {
   if (!payload || typeof payload !== 'object') {
     throw new Error('接口返回内容不是有效的 JSON 对象。');
   }
@@ -52,7 +55,7 @@ function extractResult(payload: unknown, fallbackTitle: string): FetchResult {
   }
 
   const title = pickString(data.title, nested.title, data.name, nested.name) ?? fallbackTitle;
-  return { title, markdown };
+  return { title, markdown, cacheStatus };
 }
 
 async function readError(response: Response): Promise<string | undefined> {
@@ -96,7 +99,14 @@ export async function fetchWebpageAsMarkdown(
   } catch {
     // URL validation is performed by the API service.
   }
-  return extractResult(payload, fallbackTitle);
+  const headerCacheStatus = response.headers.get('X-Cache');
+  const cacheStatus: CacheStatus | null = headerCacheStatus === 'HIT'
+    || headerCacheStatus === 'MISS'
+    || headerCacheStatus === 'BYPASS'
+    || headerCacheStatus === 'VOLATILE'
+    ? headerCacheStatus
+    : null;
+  return extractResult(payload, fallbackTitle, cacheStatus);
 }
 
 export interface BalanceResult {

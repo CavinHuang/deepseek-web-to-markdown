@@ -83,6 +83,7 @@ function normalizeUrls(input: string): { urls: string[]; invalid: string[] } {
     try {
       const url = new URL(line);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('protocol');
+      url.hash = '';
       const normalized = url.toString();
       if (!seen.has(normalized)) {
         urls.push(normalized);
@@ -93,6 +94,16 @@ function normalizeUrls(input: string): { urls: string[]; invalid: string[] } {
     }
   }
   return { urls, invalid };
+}
+
+function canonicalizeUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
 }
 
 function formatDate(value: string): string {
@@ -238,6 +249,9 @@ function App() {
     setProgress({ done: 0, total: urls.length, currentUrl: urls[0], failed: 0 });
     let failed = 0;
     let completed = 0;
+    let localReuseCount = 0;
+    let cacheHitCount = 0;
+    let volatileCacheCount = 0;
 
     try {
       for (let index = 0; index < urls.length; index += 1) {
@@ -245,21 +259,28 @@ function App() {
         const url = urls[index];
         setProgress({ done: completed, total: urls.length, currentUrl: url, failed });
         try {
-          const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal);
-          if (stopRef.current) break;
-          const now = new Date().toISOString();
-          const existing = articles.find((article) => article.url === url);
-          const article: Article = {
-            id: existing?.id ?? makeId(),
-            url,
-            title: result.title,
-            markdown: result.markdown,
-            createdAt: existing?.createdAt ?? now,
-            updatedAt: now,
-          };
-          await saveArticle(article);
-          setArticles((current) => [article, ...current.filter((item) => item.id !== article.id)]);
-          setActiveId(article.id);
+          const existing = articles.find((article) => canonicalizeUrl(article.url) === canonicalizeUrl(url));
+          if (existing) {
+            setActiveId(existing.id);
+            localReuseCount += 1;
+          } else {
+            const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal);
+            if (stopRef.current) break;
+            if (result.cacheStatus === 'HIT') cacheHitCount += 1;
+            if (result.cacheStatus === 'VOLATILE') volatileCacheCount += 1;
+            const now = new Date().toISOString();
+            const article: Article = {
+              id: makeId(),
+              url,
+              title: result.title,
+              markdown: result.markdown,
+              createdAt: now,
+              updatedAt: now,
+            };
+            await saveArticle(article);
+            setArticles((current) => [article, ...current.filter((item) => canonicalizeUrl(item.url) !== canonicalizeUrl(article.url))]);
+            setActiveId(article.id);
+          }
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') break;
           failed += 1;
@@ -272,9 +293,13 @@ function App() {
           await new Promise((resolve) => window.setTimeout(resolve, Math.max(250, Number(settings.delayMs) || 500)));
         }
       }
-      if (stopRef.current) showToast(`已停止抓取，完成 ${completed - failed} 篇，失败 ${failed} 篇。`, 'info');
-      else if (failed === 0) showToast(`抓取完成，处理 ${completed} 个链接。`, 'success');
-      else showToast(`抓取结束：完成 ${completed - failed} 篇，失败 ${failed} 篇。`, 'info');
+      const reuseSummary = `本地复用 ${localReuseCount} 篇，服务端缓存命中 ${cacheHitCount} 篇。`;
+      const cacheWarning = volatileCacheCount
+        ? `另有 ${volatileCacheCount} 个结果未能持久保存缓存，服务重启后可能再次扣费；请检查服务器缓存目录权限。`
+        : '';
+      if (stopRef.current) showToast(`已停止抓取，完成 ${completed - failed} 篇，失败 ${failed} 篇。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'info');
+      else if (failed === 0) showToast(`抓取完成，处理 ${completed} 个链接。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'success');
+      else showToast(`抓取结束：完成 ${completed - failed} 篇，失败 ${failed} 篇。 ${reuseSummary} ${cacheWarning}`, volatileCacheCount ? 'error' : 'info');
       setUrlInput((current) => current.trim());
     } finally {
       setIsRunning(false);
@@ -425,7 +450,7 @@ function App() {
                 disabled={isRunning}
                 spellCheck={false}
               />
-              <div className="input-helper"><Globe2 size={13} /> 支持公开网页 · 自动识别重复链接</div>
+              <div className="input-helper"><Globe2 size={13} /> 已保存文章和服务端缓存优先复用，避免重复请求 DeepSeek</div>
               {isRunning && (
                 <div className="progress-block">
                   <div className="progress-copy"><span>正在抓取</span><strong>{progress.done} / {progress.total}</strong></div>

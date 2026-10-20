@@ -6,6 +6,8 @@ A clean-room, local-first web-to-Markdown workspace inspired by the publicly obs
 
 - Batch capture: paste one HTTP(S) URL per line, deduplicate input, run requests sequentially, and stop an active batch.
 - Same-origin API service: the Node.js service forwards Fetch and balance requests to DeepSeek, avoiding browser-to-DeepSeek CORS limitations.
+- Persistent URL cache: successful Fetch responses are saved on disk and reused for the same normalized URL, API key, and upstream endpoint. Repeated requests avoid another DeepSeek Fetch call and duplicate billing.
+- Duplicate protection: already-saved browser articles are reused without making an API request; concurrent requests for the same URL share one upstream request.
 - Bring your own key (BYOK): enter your own DeepSeek API key in the UI. The browser sends it to your configured API service over HTTPS; the service forwards it upstream but does not persist or log it.
 - Local-first storage: articles are saved in browser IndexedDB and restored after refresh. The API key and API service URL are saved in browser localStorage.
 - Markdown workspace: edit the title and source, preview changes immediately, and switch between split, edit-only, and preview-only layouts.
@@ -63,6 +65,8 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 - DEEPSEEK_FETCH_ENDPOINT — trusted HTTPS DeepSeek-compatible Fetch endpoint.
 - API_RATE_LIMIT_MAX — requests per client per window (default 120).
 - API_RATE_LIMIT_WINDOW_MS — rate-limit window in milliseconds (default 600000).
+- URL_CACHE_DIR — persistent disk directory for successful URL responses (default `./data/url-cache` relative to the project root).
+- URL_CACHE_MEMORY_ENTRIES — maximum in-memory cache entries (default 128; disk entries are retained).
 - ALLOWED_ORIGINS — comma-separated frontend origins allowed to call the API cross-origin. Same-origin calls work without this setting.
 - TRUST_PROXY — set true only when running behind a trusted reverse proxy that sets X-Forwarded-For; enables client-IP-based rate limiting.
 
@@ -70,15 +74,18 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 
 ~~~sh
 docker build -t deepseek-web-to-markdown .
-docker run --rm -p 4173:4173 deepseek-web-to-markdown
+docker volume create deepseek-url-cache
+docker run --rm -p 4173:4173 -v deepseek-url-cache:/app/data deepseek-web-to-markdown
 ~~~
 
-For Dokploy or another container platform, use the repository Dockerfile and expose the port supplied by the platform. The service requires no server-side DeepSeek key because it uses BYOK.
+For Dokploy or another container platform, use the repository Dockerfile and expose the port supplied by the platform. **Mount a persistent volume at `/app/data`** (or set `URL_CACHE_DIR` to another persistent path); otherwise container replacement can erase the cache and cause old URLs to be requested again. The service requires no server-side DeepSeek key because it uses BYOK. Cache files are retained rather than evicted, so reserve disk space as the library grows. The in-flight duplicate guard is per process; use one API replica unless you add a shared cache with distributed locking.
 
 ## Security and privacy
 
 - The API key is saved in this browser's localStorage and sent in the Authorization header to the API service for each request. Use HTTPS in production and only configure a service you trust.
 - The API service does not persist or log API keys and does not accept an arbitrary upstream endpoint from the browser.
+- Cache filenames are SHA-256 hashes of the normalized URL, upstream endpoint, and API key; the raw API key is not stored. Cache data is isolated by API key and endpoint.
+- Successful Fetch responses are retained on disk indefinitely to prevent repeat billing. Protect the persistent cache volume because it contains captured webpage content.
 - Requests are rate-limited in memory. For multi-instance deployments, use an external shared rate limiter or gateway-level limits.
 - Target URLs must use HTTP(S); local hostnames, credentials in URLs, and common private/reserved IP ranges are rejected. This is a defense-in-depth measure, not a substitute for upstream network isolation.
 - Captured articles remain in browser IndexedDB. Clearing site data removes them.
@@ -89,6 +96,8 @@ For Dokploy or another container platform, use the repository Dockerfile and exp
 ~~~text
 server/
   index.mjs             API proxy and production static server
+  url-cache.mjs         Persistent URL response cache and cache-key hashing
+  url-cache.test.mjs    Cache normalization, persistence, and corruption tests
   validation.mjs        URL and bearer-key validation
   validation.test.mjs   API input validation tests
 src/
