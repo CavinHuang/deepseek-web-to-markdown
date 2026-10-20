@@ -34,11 +34,13 @@ Vite starts at http://localhost:4173. The API service runs at http://localhost:4
 ## Test and build
 
 ~~~sh
-npm test
 npm run typecheck
 npm run build
+npm test
 npm start
 ~~~
+
+The production smoke test runs after the frontend build and verifies that `/`, a built JavaScript asset, and `/api/health` all return successful responses.
 
 The production server serves the built frontend and API on the same port. The default port is 4173; hosting platforms can set PORT. For local production preview, run npm run build followed by npm run preview.
 
@@ -77,7 +79,7 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 
 ## Deploy with Docker Compose (recommended)
 
-The repository includes `docker-compose.yaml`. It builds the application, starts it with restart-on-failure behavior, checks `/api/health`, and mounts a named Docker volume so the URL cache survives container replacement and image updates.
+The repository includes `docker-compose.yaml` (and the `.yml` compatibility alias for Dokploy). It builds the application, explicitly enables production static serving, exposes container port `4173`, verifies both the frontend root page and `/api/health`, and mounts a named Docker volume so the URL cache survives container replacement and image updates.
 
 ~~~sh
 docker compose up -d --build

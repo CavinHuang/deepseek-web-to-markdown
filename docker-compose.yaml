@@ -7,11 +7,14 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      SERVE_STATIC: "true"
       PORT: "4173"
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       BUILTIN_API_ACCESS_TOKEN: ${BUILTIN_API_ACCESS_TOKEN:-}
       URL_CACHE_DIR: /app/data/url-cache
       URL_CACHE_MEMORY_ENTRIES: "128"
+    expose:
+      - "4173"
     ports:
       - "${APP_PORT:-4173}:4173"
     volumes:
@@ -21,7 +24,16 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:4173/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        - |
+          Promise.all([
+            fetch('http://127.0.0.1:4173/'),
+            fetch('http://127.0.0.1:4173/api/health')
+          ]).then(async ([page, api]) => {
+            const html = await page.text();
+            const health = await api.json();
+            const healthy = page.ok && html.includes('id="root"') && api.ok && health.ok === true;
+            process.exit(Number(!healthy));
+          }).catch(() => process.exit(1));
       interval: 30s
       timeout: 5s
       retries: 3

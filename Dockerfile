@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-RUN npm test && npm run typecheck && npm run build
+RUN npm run typecheck && npm run build && npm test
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
