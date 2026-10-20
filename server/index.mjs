@@ -60,11 +60,16 @@ function sendJson(res, status, payload, extraHeaders = {}) {
 }
 
 function getRequestOrigin(req) {
-  const forwardedHost = typeof req.headers['x-forwarded-host'] === 'string'
+  // X-Forwarded-Host / X-Forwarded-Proto are client-controllable unless a trusted
+  // proxy strips or overwrites them, so they are only honored when the operator
+  // opts in via TRUST_PROXY=true (the same signal used for X-Forwarded-For).
+  // Otherwise the same-origin check below would be spoofable request by request.
+  const trustProxy = process.env.TRUST_PROXY === 'true';
+  const forwardedHost = trustProxy && typeof req.headers['x-forwarded-host'] === 'string'
     ? req.headers['x-forwarded-host'].split(',').at(-1).trim()
     : '';
   const host = forwardedHost || req.headers.host || 'localhost';
-  const forwardedProto = typeof req.headers['x-forwarded-proto'] === 'string'
+  const forwardedProto = trustProxy && typeof req.headers['x-forwarded-proto'] === 'string'
     ? req.headers['x-forwarded-proto'].split(',').at(-1).trim()
     : '';
   const proto = forwardedProto || (req.socket.encrypted ? 'https' : 'http');
@@ -279,7 +284,7 @@ async function handleApi(req, res, url) {
     }
     let targetUrl;
     try {
-      targetUrl = validateTargetUrl(body.url);
+      targetUrl = await validateTargetUrl(body.url);
     } catch (error) {
       sendJson(res, 400, { error: 'invalid_target_url', message: error instanceof Error ? error.message : '网页 URL 无效。' });
       return;
