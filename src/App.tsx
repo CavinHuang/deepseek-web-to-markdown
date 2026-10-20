@@ -230,15 +230,16 @@ function App() {
 
   async function startCapture() {
     if (isRunning) return;
-    if (!settings.apiKey.trim()) {
-      setSettingsOpen(true);
-      showToast('开始前需要配置 DeepSeek API Key。', 'info');
-      return;
-    }
     const { urls, invalid } = normalizeUrls(urlInput);
     if (invalid.length > 0) showToast(`已忽略 ${invalid.length} 条无效链接。`, 'info');
     if (urls.length === 0) {
       showToast('请先输入至少一个有效的 http / https 链接。', 'error');
+      return;
+    }
+    const needsApiKey = urls.some((url) => !articles.some((article) => canonicalizeUrl(article.url) === canonicalizeUrl(url)));
+    if (needsApiKey && !settings.apiKey.trim()) {
+      setSettingsOpen(true);
+      showToast('抓取新网页前需要配置 DeepSeek API Key；已保存在本地的文章无需 Key 即可复用。', 'info');
       return;
     }
 
