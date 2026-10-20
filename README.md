@@ -70,15 +70,29 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 - ALLOWED_ORIGINS — comma-separated frontend origins allowed to call the API cross-origin. Same-origin calls work without this setting.
 - TRUST_PROXY — set true only when running behind a trusted reverse proxy that sets X-Forwarded-For; enables client-IP-based rate limiting.
 
-## Deploy with Docker
+## Deploy with Docker Compose (recommended)
+
+The repository includes `compose.yaml`. It builds the application, starts it with restart-on-failure behavior, checks `/api/health`, and mounts a named Docker volume so the URL cache survives container replacement and image updates.
+
+~~~sh
+docker compose up -d --build
+docker compose ps
+docker compose logs -f app
+~~~
+
+Open `http://localhost:4173`. To change the host port, set `APP_PORT` in your shell or `.env` file (for example, `APP_PORT=8080` exposes the app on port 8080 while the container still listens on 4173).
+
+To update after new commits, run `docker compose up -d --build` again. The named volume `deepseek-web-to-markdown-url-cache` is retained when containers are recreated. **Do not run `docker compose down -v` unless you intentionally want to delete the persistent cache**; losing it can cause old URLs to be requested again.
+
+For Dokploy, deploy from the repository using its Compose file and route traffic to container port `4173`. Keep the named volume mounted at `/app/data`. The service requires no server-side DeepSeek key because it uses BYOK. Cache files are retained rather than evicted, so reserve disk space as the library grows. The in-flight duplicate guard is per process; use one API replica unless you add a shared cache with distributed locking.
+
+### Run directly with Docker (alternative)
 
 ~~~sh
 docker build -t deepseek-web-to-markdown .
 docker volume create deepseek-url-cache
 docker run --rm -p 4173:4173 -v deepseek-url-cache:/app/data deepseek-web-to-markdown
 ~~~
-
-For Dokploy or another container platform, use the repository Dockerfile and expose the port supplied by the platform. **Mount a persistent volume at `/app/data`** (or set `URL_CACHE_DIR` to another persistent path); otherwise container replacement can erase the cache and cause old URLs to be requested again. The service requires no server-side DeepSeek key because it uses BYOK. Cache files are retained rather than evicted, so reserve disk space as the library grows. The in-flight duplicate guard is per process; use one API replica unless you add a shared cache with distributed locking.
 
 ## Security and privacy
 
