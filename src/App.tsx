@@ -134,7 +134,9 @@ function App() {
   const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' | 'info' } | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0, currentUrl: '', failed: 0 });
   const [isExporting, setIsExporting] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const controllerRef = useRef<AbortController | null>(null);
+  const saveVersionRef = useRef(0);
   const stopRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
 
@@ -180,9 +182,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeArticle || isLoading) return;
+    if (!activeArticle || isLoading) {
+      setSaveStatus('idle');
+      return;
+    }
+    const saveVersion = ++saveVersionRef.current;
+    setSaveStatus('saving');
     const timer = window.setTimeout(() => {
-      saveArticle(activeArticle).catch(() => showToast('本地保存失败，请检查浏览器存储空间。', 'error'));
+      saveArticle(activeArticle)
+        .then(() => {
+          if (saveVersion === saveVersionRef.current) setSaveStatus('saved');
+        })
+        .catch(() => {
+          if (saveVersion !== saveVersionRef.current) return;
+          setSaveStatus('error');
+          showToast('本地保存失败，请检查浏览器存储空间。', 'error');
+        });
     }, 450);
     return () => window.clearTimeout(timer);
     // Only persist fields that are editable in the workspace.
@@ -479,8 +494,8 @@ function App() {
         <a className="brand" href="#top" aria-label="DeepSeek 网页转 Markdown 首页">
           <span className="brand-mark"><FileText size={20} strokeWidth={2.1} /></span>
           <span className="brand-copy">
-            <strong>Web to Markdown</strong>
-            <small>DEEPSEEK FETCH WORKSPACE</small>
+            <strong>DeepSeek2MD</strong>
+            <small>网页转 Markdown · 本地工作台</small>
           </span>
         </a>
         <div className="topbar-right">
@@ -658,7 +673,14 @@ function App() {
                     aria-label="文章标题"
                     placeholder="输入文章标题"
                   />
-                  <span className="saved-indicator"><CheckCircle2 size={13} /> 本地自动保存</span>
+                  <span className={`saved-indicator save-status-${saveStatus}`}>
+                    {saveStatus === 'saving'
+                      ? <LoaderCircle className="spin" size={13} />
+                      : saveStatus === 'error'
+                        ? <AlertCircle size={13} />
+                        : <CheckCircle2 size={13} />}
+                    {saveStatus === 'saving' ? '正在保存' : saveStatus === 'error' ? '保存失败' : '已保存到本地'}
+                  </span>
                 </div>
                 <div className="document-meta-row">
                   <a href={activeArticle.url} target="_blank" rel="noreferrer" className="source-link"><ExternalLink size={12} /> {activeArticle.url}</a>
@@ -728,7 +750,7 @@ function App() {
         </section>
 
         <footer className="app-footer">
-          <span>DEEPSEEK WEB TO MARKDOWN <span className="footer-dot">·</span> 独立实现</span>
+          <span>DEEPSEEK2MD <span className="footer-dot">·</span> 网页转 Markdown</span>
           <span className="footer-note"><ShieldCheck size={12} /> API Key 保存在浏览器；文章保存在本地</span>
           <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">DeepSeek API <ExternalLink size={11} /></a>
         </footer>

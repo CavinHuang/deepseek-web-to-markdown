@@ -171,6 +171,8 @@ h1, h2, p { margin-top: 0; }
 .document-title-input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #29313b; font-family: Manrope, 'Noto Sans SC', sans-serif; font-size: 21px; font-weight: 800; letter-spacing: -.65px; }
 .document-title-input::placeholder { color: #b8bec8; }
 .saved-indicator { display: inline-flex; align-items: center; gap: 5px; color: #76a08a; font-size: 9px; white-space: nowrap; }
+.saved-indicator.save-status-saving { color: #9b8b5c; }
+.saved-indicator.save-status-error { color: #c25449; }
 .document-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 22px 15px 70px; border-bottom: 1px solid #edf0f3; }
 .source-link { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: #8e98a6; font-family: 'DM Mono', monospace; font-size: 9px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .source-link:hover { color: #2b6a53; }

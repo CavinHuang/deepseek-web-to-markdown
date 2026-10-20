@@ -12,8 +12,9 @@ A clean-room, local-first web-to-Markdown workspace inspired by the publicly obs
 - Gated built-in key: operators can configure `DEEPSEEK_API_KEY` and `BUILTIN_API_ACCESS_TOKEN` on the server. Only requests with the matching access token use the built-in key; other visitors must provide their own key.
 - Invalid built-in tokens are rejected with HTTP 403 and never fall back to a visitor's API key or trigger an upstream request.
 - Local-first storage: articles are saved in browser IndexedDB and restored after refresh. The API key and API service URL are saved in browser localStorage.
-- Markdown workspace: edit the title and source, preview changes immediately, and switch between split, edit-only, and preview-only layouts.
-- Export: download the current Markdown, trigger one download per saved article, or package the library into a ZIP archive.
+- Markdown workspace: edit the title and source, preview changes immediately, switch between split, edit-only, and preview-only layouts, and see real save status instead of a permanent “saved” label.
+- Article management: search the local library, select all filtered results or individual articles, bulk-delete selected articles, and export selected articles individually or as a ZIP.
+- Export: download the current Markdown, trigger one download per saved article, or package the full library into a ZIP archive.
 - Responsive UI and sanitized Markdown preview.
 - API health endpoint, request size limits, upstream timeout, URL validation, CORS allowlist, and in-memory rate limiting.
 
