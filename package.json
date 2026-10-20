@@ -5,10 +5,14 @@
   "description": "A local-first web-to-Markdown workspace powered by the DeepSeek Fetch API.",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:web": "vite --host 0.0.0.0",
+    "dev:api": "node server/index.mjs",
+    "start": "node server/index.mjs",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "tsc -b --pretty"
+    "preview": "node --input-type=module -e \"process.env.SERVE_STATIC='true'; await import('./server/index.mjs')\"",
+    "typecheck": "tsc -b --pretty",
+    "test": "node --test"
   },
   "dependencies": {
     "dompurify": "^3.2.6",
@@ -23,6 +27,7 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "concurrently": "^9.1.2"
   }
 }

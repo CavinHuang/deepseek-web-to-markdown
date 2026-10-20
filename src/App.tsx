@@ -36,11 +36,11 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { clearArticles, deleteArticle, getArticles, saveArticle, type Article } from './lib/db';
 import { downloadArticlesIndividually, downloadText, downloadZip, safeFilename } from './lib/download';
-import { DEFAULT_FETCH_ENDPOINT, fetchAccountBalance, fetchWebpageAsMarkdown } from './lib/deepseek';
+import { DEFAULT_API_BASE_URL, fetchAccountBalance, fetchWebpageAsMarkdown } from './lib/deepseek';
 
 type Settings = {
   apiKey: string;
-  endpoint: string;
+  apiBaseUrl: string;
   delayMs: number;
 };
 
@@ -50,7 +50,7 @@ type PreviewTheme = 'paper' | 'github' | 'midnight';
 const SETTINGS_KEY = 'deepseek-web-markdown-settings-v1';
 const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
-  endpoint: DEFAULT_FETCH_ENDPOINT,
+  apiBaseUrl: DEFAULT_API_BASE_URL,
   delayMs: 500,
 };
 
@@ -61,7 +61,7 @@ function loadSettings(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     return {
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
-      endpoint: typeof parsed.endpoint === 'string' && parsed.endpoint.trim() ? parsed.endpoint : DEFAULT_FETCH_ENDPOINT,
+      apiBaseUrl: typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim() ? parsed.apiBaseUrl : DEFAULT_API_BASE_URL,
       delayMs: Math.max(250, Math.min(10000, Number(parsed.delayMs) || 500)),
     };
   } catch {
@@ -203,7 +203,7 @@ function App() {
     setIsTesting(true);
     setBalanceStatus('idle');
     try {
-      const result = await fetchAccountBalance(settings.apiKey, settings.endpoint);
+      const result = await fetchAccountBalance(settings.apiKey, settings.apiBaseUrl);
       setBalanceStatus('ok');
       setBalance(result.amount ? `${result.amount} ${result.currency ?? 'CNY'}` : result.available ? '账号可用' : '暂无可用额度');
       showToast('连接成功，已读取账号状态。', 'success');
@@ -211,7 +211,7 @@ function App() {
       setBalanceStatus('error');
       setBalance(null);
       const message = error instanceof Error ? error.message : '连接失败。';
-      showToast(`${message} 若提示网络错误，也可能是浏览器 CORS 限制。`, 'error');
+      showToast(`${message} 请检查 API 服务地址、运行状态或跨域白名单。`, 'error');
     } finally {
       setIsTesting(false);
     }
@@ -245,7 +245,7 @@ function App() {
         const url = urls[index];
         setProgress({ done: completed, total: urls.length, currentUrl: url, failed });
         try {
-          const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.endpoint, controller.signal);
+          const result = await fetchWebpageAsMarkdown(url, settings.apiKey, settings.apiBaseUrl, controller.signal);
           if (stopRef.current) break;
           const now = new Date().toISOString();
           const existing = articles.find((article) => article.url === url);
@@ -442,7 +442,7 @@ function App() {
                   </button>
                 )}
               </div>
-              <div className="api-footnote"><ShieldCheck size={13} /> 请求直接发送至配置的 API 地址，不经过本项目服务器。</div>
+              <div className="api-footnote"><ShieldCheck size={13} /> 请求经 API 服务转发；API Key 不会写入服务端存储或日志。</div>
             </section>
 
             <section className="panel library-panel">
@@ -589,7 +589,7 @@ function App() {
 
         <footer className="app-footer">
           <span>DEEPSEEK WEB TO MARKDOWN <span className="footer-dot">·</span> 独立实现</span>
-          <span className="footer-note"><ShieldCheck size={12} /> API Key 与文章均保存在本地</span>
+          <span className="footer-note"><ShieldCheck size={12} /> API Key 保存在浏览器；文章保存在本地</span>
           <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">DeepSeek API <ExternalLink size={11} /></a>
         </footer>
       </main>
@@ -599,10 +599,10 @@ function App() {
           <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="modal-heading">
               <div className="modal-heading-icon"><KeyRound size={20} /></div>
-              <div><h2 id="settings-title">DeepSeek API 配置</h2><p>连接网页抓取能力，配置仅保存在当前浏览器。</p></div>
+              <div><h2 id="settings-title">DeepSeek API 配置</h2><p>API Key 保存在浏览器，请求通过你信任的 API 服务转发。</p></div>
               <button className="icon-button modal-close" onClick={() => setSettingsOpen(false)} aria-label="关闭配置"><X size={17} /></button>
             </div>
-            <div className="privacy-callout"><ShieldCheck size={17} /><span><strong>你的 Key 由你掌控</strong><small>API Key 保存在 localStorage。请求直接发送到下方配置的 API 地址，不会经过本项目的服务器。</small></span></div>
+            <div className="privacy-callout"><ShieldCheck size={17} /><span><strong>你的 Key 由你掌控</strong><small>API Key 保存在当前浏览器；每次请求会通过 API 服务转发到 DeepSeek，不会写入服务端存储或日志。请只连接你信任的 API 服务。</small></span></div>
             <div className="form-field">
               <label htmlFor="api-key">API Key <span className="required-mark">*</span></label>
               <div className="key-input-wrap">
@@ -613,9 +613,9 @@ function App() {
               <div className="field-hint">没有 Key？<a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer">前往 DeepSeek 控制台 <ExternalLink size={11} /></a></div>
             </div>
             <div className="form-field">
-              <label htmlFor="api-endpoint">Fetch 请求地址</label>
-              <input id="api-endpoint" className="text-input" value={settings.endpoint} onChange={(event) => updateSettings('endpoint', event.target.value)} placeholder={DEFAULT_FETCH_ENDPOINT} />
-              <div className="field-hint">默认使用 DeepSeek Fetch API。可填写你自己配置的兼容代理地址。</div>
+              <label htmlFor="api-base-url">API 服务地址</label>
+              <input id="api-base-url" className="text-input" value={settings.apiBaseUrl} onChange={(event) => updateSettings('apiBaseUrl', event.target.value)} placeholder={DEFAULT_API_BASE_URL} />
+              <div className="field-hint">默认使用当前站点的 /api。前后端分开部署时，可填写 API 服务完整地址，并在服务端配置 ALLOWED_ORIGINS。</div>
             </div>
             <div className="form-field">
               <div className="label-with-value"><label htmlFor="delay-ms">请求间隔</label><strong>{Math.max(250, Number(settings.delayMs) || 500)} ms</strong></div>
@@ -623,7 +623,7 @@ function App() {
               <div className="range-labels"><span>250 ms · 较快</span><span>3,000 ms · 更稳妥</span></div>
             </div>
             <div className="pricing-note"><Zap size={15} /><span><strong>注意 API 用量</strong><small>Fetch 调用可能产生费用。批量抓取前请确认账号额度，并使用合适的请求间隔。</small></span></div>
-            <div className="cors-note"><CircleHelp size={15} /><span>如果浏览器提示网络错误，可能是 API 的 CORS 限制。可在兼容的本地代理或跨域环境中运行本工具。</span></div>
+            <div className="cors-note"><CircleHelp size={15} /><span>若连接失败，请检查 API 服务是否启动、地址是否正确；跨域部署时还需将前端域名加入服务端 ALLOWED_ORIGINS。</span></div>
             {balanceStatus === 'ok' && <div className="connection-result success"><CheckCircle2 size={15} /> 连接成功：{balance ?? '账号可用'}</div>}
             {balanceStatus === 'error' && <div className="connection-result error"><AlertCircle size={15} /> 上次连接失败，请检查 Key、网络或 CORS 配置。</div>}
             <div className="modal-actions">
