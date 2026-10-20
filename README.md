@@ -72,7 +72,7 @@ Copy .env.example to .env if your deployment tooling loads environment files. Th
 
 ## Deploy with Docker Compose (recommended)
 
-The repository includes `compose.yaml`. It builds the application, starts it with restart-on-failure behavior, checks `/api/health`, and mounts a named Docker volume so the URL cache survives container replacement and image updates.
+The repository includes `docker-compose.yaml`. It builds the application, starts it with restart-on-failure behavior, checks `/api/health`, and mounts a named Docker volume so the URL cache survives container replacement and image updates.
 
 ~~~sh
 docker compose up -d --build
