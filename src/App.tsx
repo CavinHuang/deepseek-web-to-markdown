@@ -118,6 +118,7 @@ function formatDate(value: string): string {
 function App() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedArticleIds, setSelectedArticleIds] = useState<string[]>([]);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -144,6 +145,12 @@ function App() {
     if (!query) return articles;
     return articles.filter((article) => `${article.title} ${article.url} ${article.markdown}`.toLowerCase().includes(query));
   }, [articles, searchQuery]);
+  const selectedArticles = useMemo(
+    () => articles.filter((article) => selectedArticleIds.includes(article.id)),
+    [articles, selectedArticleIds],
+  );
+  const allVisibleArticlesSelected = filteredArticles.length > 0
+    && filteredArticles.every((article) => selectedArticleIds.includes(article.id));
   const previewHtml = useMemo(() => {
     const source = activeArticle?.markdown ?? '';
     return DOMPurify.sanitize(String(marked.parse(source, { gfm: true, breaks: false })), {
@@ -322,6 +329,7 @@ function App() {
       await deleteArticle(article.id);
       const remaining = articles.filter((item) => item.id !== article.id);
       setArticles(remaining);
+      setSelectedArticleIds((current) => current.filter((id) => id !== article.id));
       if (activeId === article.id) setActiveId(remaining[0]?.id ?? null);
       showToast('文章已从本地库删除。', 'success');
     } catch (error) {
@@ -335,10 +343,58 @@ function App() {
     try {
       await clearArticles();
       setArticles([]);
+      setSelectedArticleIds([]);
       setActiveId(null);
       showToast('本地文章库已清空。', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '清空失败。', 'error');
+    }
+  }
+
+  function toggleArticleSelection(id: string) {
+    setSelectedArticleIds((current) => current.includes(id)
+      ? current.filter((item) => item !== id)
+      : [...current, id]);
+  }
+
+  function toggleVisibleArticleSelection() {
+    const visibleIds = filteredArticles.map((article) => article.id);
+    if (allVisibleArticlesSelected) {
+      setSelectedArticleIds((current) => current.filter((id) => !visibleIds.includes(id)));
+      return;
+    }
+    setSelectedArticleIds((current) => [...new Set([...current, ...visibleIds])]);
+  }
+
+  function clearArticleSelection() {
+    setSelectedArticleIds([]);
+  }
+
+  async function removeSelectedArticles() {
+    if (!selectedArticles.length || isRunning) return;
+    if (!window.confirm(`确定删除选中的 ${selectedArticles.length} 篇文章吗？此操作无法撤销。`)) return;
+
+    const removedIds: string[] = [];
+    const failedCount = { value: 0 };
+    for (const article of selectedArticles) {
+      try {
+        await deleteArticle(article.id);
+        removedIds.push(article.id);
+      } catch {
+        failedCount.value += 1;
+      }
+    }
+
+    if (removedIds.length) {
+      const remaining = articles.filter((article) => !removedIds.includes(article.id));
+      setArticles(remaining);
+      setSelectedArticleIds((current) => current.filter((id) => !removedIds.includes(id)));
+      if (activeId && removedIds.includes(activeId)) setActiveId(remaining[0]?.id ?? null);
+    }
+    if (failedCount.value) {
+      showToast(`已删除 ${removedIds.length} 篇，另有 ${failedCount.value} 篇删除失败，请重试。`, 'error');
+    } else {
+      showToast(`已删除选中的 ${removedIds.length} 篇文章。`, 'success');
     }
   }
 
@@ -376,6 +432,32 @@ function App() {
       showToast(`已打包 ${articles.length} 篇文章。`, 'success');
     } catch {
       showToast('ZIP 打包失败，请稍后重试。', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  async function exportSelected() {
+    if (!selectedArticles.length || isExporting) return;
+    setIsExporting(true);
+    try {
+      await downloadArticlesIndividually(selectedArticles);
+      showToast(`已发起 ${selectedArticles.length} 个选中 Markdown 文件的下载。`, 'success');
+    } catch {
+      showToast('选中文章批量下载失败，请尝试导出 ZIP。', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  async function exportSelectedZip() {
+    if (!selectedArticles.length || isExporting) return;
+    setIsExporting(true);
+    try {
+      await downloadZip(selectedArticles);
+      showToast(`已将选中的 ${selectedArticles.length} 篇文章打包为 ZIP。`, 'success');
+    } catch {
+      showToast('选中文章 ZIP 打包失败，请稍后重试。', 'error');
     } finally {
       setIsExporting(false);
     }
@@ -487,6 +569,27 @@ function App() {
                 <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索标题、链接或正文" aria-label="搜索文章" />
                 {searchQuery && <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="清除搜索"><X size={13} /></button>}
               </div>
+              <div className="selection-toolbar">
+                <label className="select-visible-label">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleArticlesSelected}
+                    onChange={toggleVisibleArticleSelection}
+                    disabled={!filteredArticles.length || isRunning}
+                    aria-label={allVisibleArticlesSelected ? '取消选择当前列表' : '选择当前列表'}
+                  />
+                  <span>{searchQuery ? '全选搜索结果' : '全选文章'}</span>
+                </label>
+                <span className="selection-count">{selectedArticles.length} 已选</span>
+                {selectedArticles.length > 0 && (
+                  <div className="selection-actions">
+                    <button className="selection-action" onClick={() => void exportSelected()} disabled={isExporting} title="逐篇导出选中文章" aria-label="逐篇导出选中文章">导出</button>
+                    <button className="selection-action" onClick={() => void exportSelectedZip()} disabled={isExporting} title="将选中文章打包为 ZIP" aria-label="导出选中文章 ZIP">ZIP</button>
+                    <button className="selection-action danger" onClick={() => void removeSelectedArticles()} disabled={isRunning} title="删除选中文章" aria-label="删除选中文章">删除</button>
+                    <button className="selection-clear" onClick={clearArticleSelection} title="清除选择" aria-label="清除选择"><X size={12} /></button>
+                  </div>
+                )}
+              </div>
               <div className="article-list">
                 {isLoading ? (
                   <div className="list-empty"><LoaderCircle className="spin" size={22} /><span>正在读取本地文章</span></div>
@@ -497,7 +600,15 @@ function App() {
                     <span>{searchQuery ? '试试其他关键词' : '抓取网页后，文章会自动保存在这里'}</span>
                   </div>
                 ) : filteredArticles.map((article) => (
-                  <div key={article.id} className={`article-row ${activeId === article.id ? 'active' : ''}`}>
+                  <div key={article.id} className={`article-row ${activeId === article.id ? 'active' : ''} ${selectedArticleIds.includes(article.id) ? 'is-selected' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="article-checkbox"
+                      checked={selectedArticleIds.includes(article.id)}
+                      onChange={() => toggleArticleSelection(article.id)}
+                      disabled={isRunning}
+                      aria-label={`选择文章 ${article.title || '未命名文章'}`}
+                    />
                     <button className="article-select" onClick={() => setActiveId(article.id)}>
                       <span className="article-file"><FileText size={16} /></span>
                       <span className="article-meta">
