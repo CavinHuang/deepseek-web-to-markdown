@@ -20,18 +20,17 @@ test('normalizes host casing, default ports, and URL fragments', () => {
   );
 });
 
-test('scopes cache keys to the API key and upstream endpoint without exposing secrets', () => {
+test('scopes cache keys to the URL and upstream endpoint, shared across API keys', () => {
   const input = {
     url: 'https://example.com/article#one',
-    apiKey: 'sk-test-secret-value',
     upstreamEndpoint: 'https://api.deepseek.com/v1/tools/fetch',
   };
   const first = createUrlCacheKey(input);
   assert.equal(first, createUrlCacheKey({ ...input, url: 'https://EXAMPLE.com/article#two' }));
-  assert.notEqual(first, createUrlCacheKey({ ...input, apiKey: 'sk-another-secret' }));
+  assert.equal(first, createUrlCacheKey({ url: input.url, upstreamEndpoint: input.upstreamEndpoint }));
   assert.notEqual(first, createUrlCacheKey({ ...input, upstreamEndpoint: 'https://proxy.example.com/fetch' }));
   assert.match(first, /^[a-f0-9]{64}$/);
-  assert.equal(first.includes(input.apiKey), false);
+  assert.equal(first.includes('sk-test-secret-value'), false);
 });
 
 test('persists successful responses and restores them in a new cache instance', async () => {
@@ -39,7 +38,6 @@ test('persists successful responses and restores them in a new cache instance', 
   try {
     const key = createUrlCacheKey({
       url: 'https://example.com/article',
-      apiKey: 'sk-test-secret-value',
       upstreamEndpoint: 'https://api.deepseek.com/v1/tools/fetch',
     });
     const payload = { title: 'Example', markdown: '# Cached article' };
@@ -59,7 +57,6 @@ test('fails closed when an existing cache entry is corrupted', async () => {
   try {
     const key = createUrlCacheKey({
       url: 'https://example.com/article',
-      apiKey: 'sk-test-secret-value',
       upstreamEndpoint: 'https://api.deepseek.com/v1/tools/fetch',
     });
     await mkdir(directory, { recursive: true });

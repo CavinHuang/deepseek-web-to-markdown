@@ -6,10 +6,10 @@ A clean-room, local-first web-to-Markdown workspace inspired by the publicly obs
 
 - Batch capture: paste one HTTP(S) URL per line, deduplicate input, run requests sequentially, and stop an active batch.
 - Same-origin API service: the Node.js service forwards Fetch and balance requests to DeepSeek, avoiding browser-to-DeepSeek CORS limitations.
-- Persistent URL cache: successful Fetch responses are saved on disk and reused for the same normalized URL, API key, and upstream endpoint. Repeated requests avoid another DeepSeek Fetch call and duplicate billing.
+- Persistent URL cache: successful Fetch responses are saved on disk and reused for the same normalized URL and upstream endpoint, whichever API key made the original request. Repeated requests avoid another DeepSeek Fetch call and duplicate billing.
 - Duplicate protection: already-saved browser articles are reused without making an API request; concurrent requests for the same URL share one upstream request.
 - Bring your own key (BYOK): visitors can enter their own DeepSeek API key.
-- Gated built-in key: operators can configure `DEEPSEEK_API_KEY` and `BUILTIN_API_ACCESS_TOKEN` on the server. Only requests with the matching access token use the built-in key; other visitors must provide their own key.
+- Gated built-in key: operators can configure `DEEPSEEK_API_KEY` and `BUILTIN_API_ACCESS_TOKEN` on the server. Authorized users paste the access token into the "内置 API 访问 Token（授权用户）" section of the settings drawer; only requests carrying the matching token use the built-in key, and other visitors must provide their own key.
 - Invalid built-in tokens are rejected with HTTP 403 and never fall back to a visitor's API key or trigger an upstream request.
 - Local-first storage: articles are saved in browser IndexedDB and restored after refresh. The API key and API service URL are saved in browser localStorage.
 - Markdown workspace: edit the title and source, preview changes immediately, and switch between split, edit-only, and preview-only layouts.
@@ -107,7 +107,7 @@ docker run --rm -p 4173:4173 -v deepseek-url-cache:/app/data deepseek-web-to-mar
 - A visitor-owned API key and the optional built-in access token are saved in this browser's localStorage. Use HTTPS in production and only configure a service you trust.
 - The built-in DeepSeek key and its access token remain server-side environment variables and are never sent to the browser or upstream response.
 - The API service does not persist or log API keys or access tokens and does not accept an arbitrary upstream endpoint from the browser.
-- Cache filenames are SHA-256 hashes of the normalized URL, upstream endpoint, and API key; the raw API key is not stored. Cache data is isolated by API key and endpoint.
+- Cache filenames are SHA-256 hashes of the normalized URL and upstream endpoint; the API key is neither stored nor hashed. Entries are shared across API keys because the key only authenticates and bills — it does not change the fetched content. Cache entries created before this keying change are orphaned and their URLs are fetched once more under the new key.
 - Successful Fetch responses are retained on disk indefinitely to prevent repeat billing. Protect the persistent cache volume because it contains captured webpage content.
 - Requests are rate-limited in memory. For multi-instance deployments, use an external shared rate limiter or gateway-level limits.
 - Target URLs must use HTTP(S); local hostnames, credentials in URLs, and private/reserved IP literals (including IPv4-mapped and NAT64 forms) are rejected, and hostnames are additionally resolved and checked so names pointing at private addresses (e.g. nip.io style) are blocked too. This is a defense-in-depth measure, not a substitute for upstream network isolation.

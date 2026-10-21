@@ -291,7 +291,6 @@ async function handleApi(req, res, url) {
     }
     const cacheKey = createUrlCacheKey({
       url: targetUrl,
-      apiKey,
       upstreamEndpoint: fetchEndpoint.toString(),
     });
     let cached;

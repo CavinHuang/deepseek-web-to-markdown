@@ -736,6 +736,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .text-input:focus { border-color: rgba(0, 193, 106, .5); box-shadow: 0 0 0 3px rgba(0, 193, 106, .08); }
 .field-hint { margin-top: 6px; color: var(--ink-muted); font-size: 11px; line-height: 1.6; }
 .field-hint a { display: inline-flex; align-items: center; gap: 3px; color: var(--primary-hover); text-decoration: none; font-weight: 500; }
+.advanced-token { margin-top: 9px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.advanced-token summary { cursor: pointer; color: #475467; font-size: 11px; font-weight: 600; list-style: revert; }
+.advanced-token[open] summary { margin-bottom: 9px; }
+.advanced-token[open] .field-hint { margin-top: 7px; }
 .field-hint a:hover { text-decoration: underline; }
 .request-sample { margin: 4px 0 14px; padding: 11px 13px; border-radius: 10px; background: #f2f4f7; }
 .request-sample > span { display: block; margin-bottom: 7px; color: #475467; font-size: 11px; font-weight: 600; }

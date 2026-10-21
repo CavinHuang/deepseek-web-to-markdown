@@ -9,8 +9,11 @@ export function normalizeCacheUrl(value) {
   return url.toString();
 }
 
-export function createUrlCacheKey({ url, apiKey, upstreamEndpoint }) {
-  const source = [upstreamEndpoint, apiKey, normalizeCacheUrl(url)].join('\0');
+export function createUrlCacheKey({ url, upstreamEndpoint }) {
+  // The API key only authenticates and bills; it does not change the fetched content,
+  // so entries are shared across keys and a previously fetched URL is served from
+  // cache no matter which authorized key asks for it.
+  const source = [upstreamEndpoint, normalizeCacheUrl(url)].join('\0');
   return createHash('sha256').update(source).digest('hex');
 }
 

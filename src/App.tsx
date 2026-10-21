@@ -1038,6 +1038,19 @@ function App() {
                 placeholder={DEFAULT_API_BASE_URL}
               />
               <div className="field-hint">默认：{DEFAULT_API_BASE_URL}</div>
+              <details className="advanced-token">
+                <summary>内置 API 访问 Token（授权用户）</summary>
+                <input
+                  id="builtin-token"
+                  className="text-input"
+                  type="password"
+                  value={settings.builtinAccessToken}
+                  onChange={(event) => updateSettings('builtinAccessToken', event.target.value)}
+                  placeholder="由服务方提供的访问 Token"
+                  autoComplete="off"
+                />
+                <div className="field-hint">填写后抓取将使用服务端内置 Key，无需自己的 API Key；Token 与 Key 一样只保存在本机浏览器。填错会被拒绝且不会回退。</div>
+              </details>
             </div>
             <div className="form-field">
               <label htmlFor="delay-ms">并发间隔（ms）</label>
