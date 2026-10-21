@@ -8,6 +8,18 @@ export interface FetchResult {
   cacheStatus: CacheStatus | null;
 }
 
+// DeepSeek Fetch 这类 LLM 生成上游常把整篇 Markdown 过度反斜杠转义（行首 "\#"、正文 "5\.5"），
+// 行首转义的井号会吞掉标题结构导致无法解析。只有行首出现转义标题时才判定整篇过度转义并
+// 去除标点前的反斜杠（先保护 "\\" 再还原）；合法使用少量转义（如字面量 "\*"）的文档不受影响。
+// 判定通过后函数是幂等的，可安全地在入库、预览与打开文章时重复调用。
+export function normalizeEscapedMarkdown(markdown: string): string {
+  if (!/(^|\n)\\#{1,6}(\s|$)/.test(markdown)) return markdown;
+  return markdown
+    .replace(/\\\\/g, '\u0000')
+    .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, '$1')
+    .replace(/\u0000/g, '\\');
+}
+
 function pickString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim();
 }
@@ -55,7 +67,7 @@ function extractResult(payload: unknown, fallbackTitle: string, cacheStatus: Cac
   }
 
   const title = pickString(data.title, nested.title, data.name, nested.name) ?? fallbackTitle;
-  return { title, markdown, cacheStatus };
+  return { title, markdown: normalizeEscapedMarkdown(markdown), cacheStatus };
 }
 
 function buildAuthHeaders(apiKey: string, builtinAccessToken: string, includeContentType = false): Record<string, string> {

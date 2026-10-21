@@ -31,7 +31,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { clearArticles, deleteArticle, getArticles, saveArticle, type Article } from './lib/db';
 import { downloadArticlesIndividually, downloadText, downloadZip, safeFilename } from './lib/download';
-import { DEFAULT_API_BASE_URL, fetchAccountBalance, fetchWebpageAsMarkdown } from './lib/deepseek';
+import { DEFAULT_API_BASE_URL, fetchAccountBalance, fetchWebpageAsMarkdown, normalizeEscapedMarkdown } from './lib/deepseek';
 
 type Settings = {
   apiKey: string;
@@ -208,11 +208,20 @@ function App() {
   const allVisibleArticlesSelected = filteredArticles.length > 0
     && filteredArticles.every((article) => selectedArticleIds.includes(article.id));
   const previewHtml = useMemo(() => {
-    const source = activeArticle?.markdown ?? '';
+    const source = normalizeEscapedMarkdown(activeArticle?.markdown ?? '');
     return DOMPurify.sanitize(String(marked.parse(source, { gfm: true, breaks: false })), {
       USE_PROFILES: { html: true },
     });
   }, [activeArticle?.markdown]);
+
+  // 旧版本抓取的文章可能被上游整篇过度转义（"\#"、"5\.5"），打开时归一化一次并随防抖保存写回本机。
+  useEffect(() => {
+    if (!activeArticle) return;
+    const normalized = normalizeEscapedMarkdown(activeArticle.markdown);
+    if (normalized !== activeArticle.markdown) updateActiveArticle({ markdown: normalized });
+    // 仅在切换文章时执行一次；归一化是幂等的，不会与用户输入形成循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeArticle?.id]);
   const hasPreviewContent = Boolean(activeArticle?.markdown.trim());
   const progressPercent = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
